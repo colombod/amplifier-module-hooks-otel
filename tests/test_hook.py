@@ -311,6 +311,44 @@ class TestOTelHookDoesNotMutateEventData:
         assert set(tool_data.keys()) == original_keys
 
 
+class TestOTelHookOptOut:
+    """Tests for opt-out functionality."""
+
+    @pytest.fixture
+    def hook_disabled(self):
+        """Create an OTelHook with enabled=False (opt-out)."""
+        config = OTelConfig(enabled=False)
+        return OTelHook(config)
+
+    @pytest.mark.asyncio
+    async def test_disabled_hook_creates_no_spans(self, hook_disabled, span_exporter):
+        """When disabled, no spans are created."""
+        data = {"session_id": "test-session-123"}
+
+        await hook_disabled.on_session_start("session:start", data)
+        await hook_disabled.on_session_end("session:end", data)
+
+        # No spans should be exported
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 0
+
+    @pytest.mark.asyncio
+    async def test_disabled_hook_still_returns_continue(self, hook_disabled):
+        """Disabled hook still returns continue (doesn't block)."""
+        data = {"session_id": "test-session-123"}
+
+        result = await hook_disabled.on_session_start("session:start", data)
+        assert result.action == "continue"
+
+        result = await hook_disabled.on_llm_request("llm:request", data)
+        assert result.action == "continue"
+
+    def test_disabled_hook_has_no_span_manager(self, hook_disabled):
+        """Disabled hook doesn't initialize span manager."""
+        assert hook_disabled._span_manager is None
+        assert hook_disabled._metrics_recorder is None
+
+
 class TestOTelConfig:
     """Tests for OTelConfig."""
 
@@ -318,6 +356,7 @@ class TestOTelConfig:
         """Default config has expected values."""
         config = OTelConfig()
 
+        assert config.enabled is True
         assert config.traces_enabled is True
         assert config.metrics_enabled is True
 
@@ -339,3 +378,65 @@ class TestOTelConfig:
 
         assert config.traces_enabled is True
         assert config.metrics_enabled is False
+
+    def test_from_dict_with_enabled_false(self):
+        """Config can be disabled via enabled=False."""
+        config = OTelConfig.from_dict({"enabled": False})
+
+        assert config.enabled is False
+
+    def test_is_active_property(self):
+        """is_active returns True only when enabled AND features active."""
+        # Fully enabled
+        config = OTelConfig(enabled=True, traces_enabled=True, metrics_enabled=True)
+        assert config.is_active is True
+
+        # Disabled globally
+        config = OTelConfig(enabled=False, traces_enabled=True, metrics_enabled=True)
+        assert config.is_active is False
+
+        # Enabled but no features
+        config = OTelConfig(enabled=True, traces_enabled=False, metrics_enabled=False)
+        assert config.is_active is False
+
+
+class TestOTelConfigEnvVar:
+    """Tests for environment variable opt-out."""
+
+    def test_env_var_opt_out(self, monkeypatch):
+        """AMPLIFIER_OTEL_OPT_OUT=1 disables telemetry."""
+        monkeypatch.setenv("AMPLIFIER_OTEL_OPT_OUT", "1")
+
+        # Need to reimport to pick up env var change
+        from amplifier_module_hooks_otel.config import OTelConfig as FreshConfig
+
+        config = FreshConfig()
+        assert config.enabled is False
+
+    def test_env_var_opt_out_true(self, monkeypatch):
+        """AMPLIFIER_OTEL_OPT_OUT=true disables telemetry."""
+        monkeypatch.setenv("AMPLIFIER_OTEL_OPT_OUT", "true")
+
+        from amplifier_module_hooks_otel.config import OTelConfig as FreshConfig
+
+        config = FreshConfig()
+        assert config.enabled is False
+
+    def test_env_var_not_set_enables(self, monkeypatch):
+        """Without env var, telemetry is enabled."""
+        monkeypatch.delenv("AMPLIFIER_OTEL_OPT_OUT", raising=False)
+
+        from amplifier_module_hooks_otel.config import OTelConfig as FreshConfig
+
+        config = FreshConfig()
+        assert config.enabled is True
+
+    def test_env_var_overrides_config(self, monkeypatch):
+        """Env var opt-out overrides config enabled=True."""
+        monkeypatch.setenv("AMPLIFIER_OTEL_OPT_OUT", "1")
+
+        from amplifier_module_hooks_otel.config import OTelConfig as FreshConfig
+
+        # Even if config says enabled=True, env var wins
+        config = FreshConfig.from_dict({"enabled": True})
+        assert config.enabled is False

@@ -51,8 +51,29 @@ hooks:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
+| `enabled` | bool | `true` | Master switch - disables all telemetry when false |
 | `traces_enabled` | bool | `true` | Enable/disable span creation |
 | `metrics_enabled` | bool | `true` | Enable/disable metrics recording |
+
+### Opt-Out via Environment Variable
+
+You can disable all telemetry collection using the `AMPLIFIER_OTEL_OPT_OUT` environment variable:
+
+```bash
+# Disable telemetry globally
+export AMPLIFIER_OTEL_OPT_OUT=1
+
+# Or per-command
+AMPLIFIER_OTEL_OPT_OUT=1 amplifier run "hello"
+```
+
+**Accepted values:** `1`, `true`, `yes`, `on` (case-insensitive)
+
+The environment variable **takes precedence** over configuration settings. This is useful for:
+- CI/CD environments where telemetry is not needed
+- Development machines where you want to reduce noise
+- Privacy-sensitive deployments
+- Troubleshooting (temporarily disable to isolate issues)
 
 ## Application-Side OTel Setup
 

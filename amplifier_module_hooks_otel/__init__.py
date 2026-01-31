@@ -83,6 +83,17 @@ class OTelHook:
         """
         self.config = config
 
+        # If globally disabled (opt-out), don't initialize anything
+        if not config.enabled:
+            logger.info("OTel hook disabled (opt-out active)")
+            self._tracer = None
+            self._meter = None
+            self._span_manager = None
+            self._metrics_recorder = None
+            self._pending_llm = {}
+            self._pending_tools = {}
+            return
+
         # Get tracer and meter from global providers (app configures these)
         self._tracer = trace.get_tracer(
             "amplifier.hooks.otel",
@@ -111,7 +122,8 @@ class OTelHook:
         Returns:
             HookResult with action="continue".
         """
-        if not self.config.traces_enabled:
+        # Check global opt-out first, then feature-specific flag
+        if not self.config.enabled or not self.config.traces_enabled:
             return HookResult(action="continue")
 
         session_id = data.get("session_id")
@@ -119,7 +131,7 @@ class OTelHook:
             return HookResult(action="continue")
 
         attrs = AttributeMapper.for_session(data)
-        self._span_manager.start_session_span(session_id, attrs)
+        self._span_manager.start_session_span(session_id, attrs)  # type: ignore[union-attr]
 
         return HookResult(action="continue")
 
@@ -133,12 +145,12 @@ class OTelHook:
         Returns:
             HookResult with action="continue".
         """
-        if not self.config.traces_enabled:
+        if not self.config.enabled or not self.config.traces_enabled:
             return HookResult(action="continue")
 
         session_id = data.get("session_id")
         if session_id:
-            self._span_manager.end_session_span(session_id)
+            self._span_manager.end_session_span(session_id)  # type: ignore[union-attr]
 
         return HookResult(action="continue")
 
@@ -152,12 +164,12 @@ class OTelHook:
         Returns:
             HookResult with action="continue".
         """
-        if not self.config.traces_enabled:
+        if not self.config.enabled or not self.config.traces_enabled:
             return HookResult(action="continue")
 
         session_id = data.get("session_id")
         if session_id:
-            self._span_manager.start_turn_span(session_id)
+            self._span_manager.start_turn_span(session_id)  # type: ignore[union-attr]
 
         return HookResult(action="continue")
 
@@ -171,12 +183,12 @@ class OTelHook:
         Returns:
             HookResult with action="continue".
         """
-        if not self.config.traces_enabled:
+        if not self.config.enabled or not self.config.traces_enabled:
             return HookResult(action="continue")
 
         session_id = data.get("session_id")
         if session_id:
-            self._span_manager.end_turn_span(session_id)
+            self._span_manager.end_turn_span(session_id)  # type: ignore[union-attr]
 
         return HookResult(action="continue")
 
@@ -190,7 +202,7 @@ class OTelHook:
         Returns:
             HookResult with action="continue".
         """
-        if not self.config.traces_enabled:
+        if not self.config.enabled or not self.config.traces_enabled:
             return HookResult(action="continue")
 
         session_id = data.get("session_id")
@@ -201,7 +213,7 @@ class OTelHook:
         model = data.get("model", "unknown")
         correlation_key = f"llm:{session_id}:{id(data)}"
 
-        self._span_manager.start_child_span(
+        self._span_manager.start_child_span(  # type: ignore[union-attr]
             session_id,
             f"chat {model}",
             SpanKind.CLIENT,
@@ -228,7 +240,7 @@ class OTelHook:
         Returns:
             HookResult with action="continue".
         """
-        if not self.config.traces_enabled:
+        if not self.config.enabled or not self.config.traces_enabled:
             return HookResult(action="continue")
 
         session_id = data.get("session_id")
@@ -240,14 +252,14 @@ class OTelHook:
             return HookResult(action="continue")
 
         # Add response attributes to span
-        span = self._span_manager.get_active_span(correlation_key)
+        span = self._span_manager.get_active_span(correlation_key)  # type: ignore[union-attr]
         if span:
             attrs = AttributeMapper.for_llm_response(data)
             for key, value in attrs.items():
                 span.set_attribute(key, value)
 
         # End span
-        self._span_manager.end_child_span(correlation_key, StatusCode.OK)
+        self._span_manager.end_child_span(correlation_key, StatusCode.OK)  # type: ignore[union-attr]
 
         # Record metrics
         if self._metrics_recorder:
@@ -273,7 +285,7 @@ class OTelHook:
         Returns:
             HookResult with action="continue".
         """
-        if not self.config.traces_enabled:
+        if not self.config.enabled or not self.config.traces_enabled:
             return HookResult(action="continue")
 
         session_id = data.get("session_id")
@@ -285,7 +297,7 @@ class OTelHook:
         attrs = AttributeMapper.for_tool(data)
         correlation_key = f"tool:{session_id}:{tool_name}:{id(data)}"
 
-        self._span_manager.start_child_span(
+        self._span_manager.start_child_span(  # type: ignore[union-attr]
             session_id,
             f"execute_tool {tool_name}",
             SpanKind.INTERNAL,
@@ -311,14 +323,14 @@ class OTelHook:
         Returns:
             HookResult with action="continue".
         """
-        if not self.config.traces_enabled:
+        if not self.config.enabled or not self.config.traces_enabled:
             return HookResult(action="continue")
 
         session_id = data.get("session_id")
         correlation_key = self._pending_tools.pop(session_id, None) if session_id else None
 
         if correlation_key:
-            self._span_manager.end_child_span(correlation_key, StatusCode.OK)
+            self._span_manager.end_child_span(correlation_key, StatusCode.OK)  # type: ignore[union-attr]
 
             if self._metrics_recorder:
                 attrs = AttributeMapper.for_tool(data)
@@ -336,7 +348,7 @@ class OTelHook:
         Returns:
             HookResult with action="continue".
         """
-        if not self.config.traces_enabled:
+        if not self.config.enabled or not self.config.traces_enabled:
             return HookResult(action="continue")
 
         session_id = data.get("session_id")
@@ -344,7 +356,7 @@ class OTelHook:
 
         if correlation_key:
             # Add error attributes
-            span = self._span_manager.get_active_span(correlation_key)
+            span = self._span_manager.get_active_span(correlation_key)  # type: ignore[union-attr]
             if span:
                 error_attrs = AttributeMapper.for_error(data)
                 for key, value in error_attrs.items():
@@ -356,7 +368,7 @@ class OTelHook:
                 if isinstance(error_data, dict)
                 else "Tool error"
             )
-            self._span_manager.end_child_span(correlation_key, StatusCode.ERROR, error_msg)
+            self._span_manager.end_child_span(correlation_key, StatusCode.ERROR, error_msg)  # type: ignore[union-attr]
 
             if self._metrics_recorder:
                 attrs = AttributeMapper.for_tool(data)
@@ -374,7 +386,7 @@ class OTelHook:
         Returns:
             HookResult with action="continue".
         """
-        if not self.config.traces_enabled:
+        if not self.config.enabled or not self.config.traces_enabled:
             return HookResult(action="continue")
 
         session_id = data.get("session_id")
@@ -388,7 +400,7 @@ class OTelHook:
                 if isinstance(error_data, dict)
                 else "Provider error"
             )
-            self._span_manager.end_child_span(correlation_key, StatusCode.ERROR, error_msg)
+            self._span_manager.end_child_span(correlation_key, StatusCode.ERROR, error_msg)  # type: ignore[union-attr]
 
         return HookResult(action="continue")
 
