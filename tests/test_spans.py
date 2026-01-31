@@ -188,29 +188,3 @@ class TestSpanManagerChildSpans:
 
         nonexistent = span_manager.get_active_span("nonexistent")
         assert nonexistent is None
-
-
-class TestSpanManagerTraceId:
-    """Tests for trace ID generation."""
-
-    def test_session_to_trace_id_is_deterministic(self):
-        """Same session ID produces same trace ID."""
-        trace_id_1 = SpanManager.session_to_trace_id("session-123")
-        trace_id_2 = SpanManager.session_to_trace_id("session-123")
-
-        assert trace_id_1 == trace_id_2
-
-    def test_different_sessions_produce_different_trace_ids(self):
-        """Different session IDs produce different trace IDs."""
-        trace_id_1 = SpanManager.session_to_trace_id("session-123")
-        trace_id_2 = SpanManager.session_to_trace_id("session-456")
-
-        assert trace_id_1 != trace_id_2
-
-    def test_trace_id_is_128_bit_int(self):
-        """Trace ID is a valid 128-bit integer."""
-        trace_id = SpanManager.session_to_trace_id("session-123")
-
-        assert isinstance(trace_id, int)
-        assert trace_id >= 0
-        assert trace_id < 2**128

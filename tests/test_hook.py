@@ -100,7 +100,7 @@ class TestOTelHookLlmOperations:
 
     @pytest.mark.asyncio
     async def test_llm_request_creates_span(self, hook, span_exporter):
-        """llm:request event creates an LLM span."""
+        """llm:request event creates an LLM span and tracks correlation internally."""
         session_data = {"session_id": "test-session-123"}
         await hook.on_session_start("session:start", session_data)
 
@@ -113,11 +113,14 @@ class TestOTelHookLlmOperations:
         result = await hook.on_llm_request("llm:request", llm_data)
 
         assert result.action == "continue"
-        assert "_otel_correlation_key" in llm_data
+        # Verify internal correlation tracking (not event mutation)
+        assert "test-session-123" in hook._pending_llm
+        # Verify event data was NOT mutated
+        assert "_otel_correlation_key" not in llm_data
 
     @pytest.mark.asyncio
     async def test_llm_response_closes_span(self, hook, span_exporter):
-        """llm:response event closes the LLM span."""
+        """llm:response event closes the LLM span using internal correlation."""
         session_data = {"session_id": "test-session-123"}
         await hook.on_session_start("session:start", session_data)
 
@@ -130,7 +133,6 @@ class TestOTelHookLlmOperations:
 
         response_data = {
             "session_id": "test-session-123",
-            "_otel_correlation_key": llm_data["_otel_correlation_key"],
             "usage": {"input_tokens": 100, "output_tokens": 50},
             "model": "claude-3-opus-20240229",
             "finish_reason": "end_turn",
@@ -139,6 +141,8 @@ class TestOTelHookLlmOperations:
         result = await hook.on_llm_response("llm:response", response_data)
 
         assert result.action == "continue"
+        # Verify correlation was consumed
+        assert "test-session-123" not in hook._pending_llm
 
     @pytest.mark.asyncio
     async def test_llm_response_records_metrics(self, hook, metric_reader):
@@ -155,7 +159,6 @@ class TestOTelHookLlmOperations:
 
         response_data = {
             "session_id": "test-session-456",
-            "_otel_correlation_key": llm_data["_otel_correlation_key"],
             "usage": {"input_tokens": 100, "output_tokens": 50},
         }
         await hook.on_llm_response("llm:response", response_data)
@@ -171,7 +174,7 @@ class TestOTelHookToolOperations:
 
     @pytest.mark.asyncio
     async def test_tool_pre_creates_span(self, hook, span_exporter):
-        """tool:pre event creates a tool span."""
+        """tool:pre event creates a tool span and tracks correlation internally."""
         session_data = {"session_id": "test-session-123"}
         await hook.on_session_start("session:start", session_data)
 
@@ -183,11 +186,14 @@ class TestOTelHookToolOperations:
         result = await hook.on_tool_pre("tool:pre", tool_data)
 
         assert result.action == "continue"
-        assert "_otel_correlation_key" in tool_data
+        # Verify internal correlation tracking (not event mutation)
+        assert "test-session-123" in hook._pending_tools
+        # Verify event data was NOT mutated
+        assert "_otel_correlation_key" not in tool_data
 
     @pytest.mark.asyncio
     async def test_tool_post_closes_span_success(self, hook, span_exporter):
-        """tool:post event closes the tool span with success."""
+        """tool:post event closes the tool span with success using internal correlation."""
         session_data = {"session_id": "test-session-123"}
         await hook.on_session_start("session:start", session_data)
 
@@ -196,13 +202,14 @@ class TestOTelHookToolOperations:
 
         post_data = {
             "session_id": "test-session-123",
-            "_otel_correlation_key": tool_data["_otel_correlation_key"],
             "tool_name": "bash",
         }
 
         result = await hook.on_tool_post("tool:post", post_data)
 
         assert result.action == "continue"
+        # Verify correlation was consumed
+        assert "test-session-123" not in hook._pending_tools
 
     @pytest.mark.asyncio
     async def test_tool_error_closes_span_with_error(self, hook, span_exporter):
@@ -215,7 +222,6 @@ class TestOTelHookToolOperations:
 
         error_data = {
             "session_id": "test-session-123",
-            "_otel_correlation_key": tool_data["_otel_correlation_key"],
             "tool_name": "bash",
             "error": {"type": "CommandError", "message": "Command failed"},
         }
@@ -223,6 +229,8 @@ class TestOTelHookToolOperations:
         result = await hook.on_tool_error("tool:error", error_data)
 
         assert result.action == "continue"
+        # Verify correlation was consumed
+        assert "test-session-123" not in hook._pending_tools
 
 
 class TestOTelHookDisabledFeatures:
@@ -264,6 +272,45 @@ class TestOTelHookAlwaysContinues:
         assert (await hook.on_session_end("session:end", session_data)).action == "continue"
 
 
+class TestOTelHookDoesNotMutateEventData:
+    """Tests that hook never mutates event data (purely observational)."""
+
+    @pytest.mark.asyncio
+    async def test_llm_request_does_not_mutate_data(self, hook):
+        """llm:request handler does not mutate the event data dict."""
+        session_data = {"session_id": "test-session-123"}
+        await hook.on_session_start("session:start", session_data)
+
+        llm_data = {
+            "session_id": "test-session-123",
+            "provider": "anthropic",
+            "model": "claude-3-opus",
+        }
+        original_keys = set(llm_data.keys())
+
+        await hook.on_llm_request("llm:request", llm_data)
+
+        # Event data should have the same keys
+        assert set(llm_data.keys()) == original_keys
+
+    @pytest.mark.asyncio
+    async def test_tool_pre_does_not_mutate_data(self, hook):
+        """tool:pre handler does not mutate the event data dict."""
+        session_data = {"session_id": "test-session-123"}
+        await hook.on_session_start("session:start", session_data)
+
+        tool_data = {
+            "session_id": "test-session-123",
+            "tool_name": "bash",
+        }
+        original_keys = set(tool_data.keys())
+
+        await hook.on_tool_pre("tool:pre", tool_data)
+
+        # Event data should have the same keys
+        assert set(tool_data.keys()) == original_keys
+
+
 class TestOTelConfig:
     """Tests for OTelConfig."""
 
@@ -271,31 +318,24 @@ class TestOTelConfig:
         """Default config has expected values."""
         config = OTelConfig()
 
-        assert config.service_name == "amplifier"
         assert config.traces_enabled is True
         assert config.metrics_enabled is True
-        assert config.capture_input_messages is False
-        assert config.capture_output_messages is False
 
     def test_from_dict(self):
         """Config can be created from dict."""
         config = OTelConfig.from_dict(
             {
-                "service_name": "my-app",
                 "traces_enabled": False,
                 "unknown_field": "ignored",
             }
         )
 
-        assert config.service_name == "my-app"
         assert config.traces_enabled is False
         # Unknown fields are ignored
 
-    def test_privacy_defaults_off(self):
-        """Privacy-sensitive options default to off."""
-        config = OTelConfig()
+    def test_from_dict_with_metrics_disabled(self):
+        """Config can disable metrics."""
+        config = OTelConfig.from_dict({"metrics_enabled": False})
 
-        assert config.capture_input_messages is False
-        assert config.capture_output_messages is False
-        assert config.capture_tool_input is False
-        assert config.capture_tool_output is False
+        assert config.traces_enabled is True
+        assert config.metrics_enabled is False

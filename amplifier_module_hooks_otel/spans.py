@@ -1,6 +1,5 @@
 """Span lifecycle management for OpenTelemetry tracing."""
 
-import hashlib
 import logging
 from typing import Any
 
@@ -33,19 +32,6 @@ class SpanManager:
         self._turn_spans: dict[str, Span] = {}  # session_id → current turn span
         self._active_spans: dict[str, Span] = {}  # correlation_key → span
         self._turn_counters: dict[str, int] = {}  # session_id → turn number
-
-    @staticmethod
-    def session_to_trace_id(session_id: str) -> int:
-        """Generate deterministic trace_id from session_id (128-bit int).
-
-        Args:
-            session_id: The session identifier.
-
-        Returns:
-            A 128-bit integer suitable for use as a trace ID.
-        """
-        hash_bytes = hashlib.sha256(session_id.encode()).digest()[:16]
-        return int.from_bytes(hash_bytes, byteorder="big")
 
     def start_session_span(self, session_id: str, attributes: dict[str, Any]) -> Span:
         """Start root span for session.

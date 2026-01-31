@@ -96,6 +96,11 @@ class OTelHook:
         self._span_manager = SpanManager(self._tracer)
         self._metrics_recorder = MetricsRecorder(self._meter) if config.metrics_enabled else None
 
+        # Internal correlation tracking - avoids mutating event data
+        # Maps (session_id, event_type) → correlation_key for pending operations
+        self._pending_llm: dict[str, str] = {}  # session_id → correlation_key
+        self._pending_tools: dict[str, str] = {}  # session_id → correlation_key
+
     async def on_session_start(self, event: str, data: dict[str, Any]) -> HookResult:
         """Handle session:start - create root span.
 
@@ -208,8 +213,8 @@ class OTelHook:
         if self._metrics_recorder:
             self._metrics_recorder.start_timing(correlation_key)
 
-        # Store correlation key in data for response matching
-        data["_otel_correlation_key"] = correlation_key
+        # Store correlation key internally (don't mutate event data)
+        self._pending_llm[session_id] = correlation_key
 
         return HookResult(action="continue")
 
@@ -227,11 +232,12 @@ class OTelHook:
             return HookResult(action="continue")
 
         session_id = data.get("session_id")
-        correlation_key = data.get("_otel_correlation_key")
+
+        # Retrieve correlation key from internal tracking (don't read from event data)
+        correlation_key = self._pending_llm.pop(session_id, None) if session_id else None
 
         if not correlation_key:
-            # Fallback: construct key (less reliable)
-            correlation_key = f"llm:{session_id}:response"
+            return HookResult(action="continue")
 
         # Add response attributes to span
         span = self._span_manager.get_active_span(correlation_key)
@@ -290,7 +296,8 @@ class OTelHook:
         if self._metrics_recorder:
             self._metrics_recorder.start_timing(correlation_key)
 
-        data["_otel_correlation_key"] = correlation_key
+        # Store correlation key internally (don't mutate event data)
+        self._pending_tools[session_id] = correlation_key
 
         return HookResult(action="continue")
 
@@ -307,7 +314,9 @@ class OTelHook:
         if not self.config.traces_enabled:
             return HookResult(action="continue")
 
-        correlation_key = data.get("_otel_correlation_key")
+        session_id = data.get("session_id")
+        correlation_key = self._pending_tools.pop(session_id, None) if session_id else None
+
         if correlation_key:
             self._span_manager.end_child_span(correlation_key, StatusCode.OK)
 
@@ -330,7 +339,9 @@ class OTelHook:
         if not self.config.traces_enabled:
             return HookResult(action="continue")
 
-        correlation_key = data.get("_otel_correlation_key")
+        session_id = data.get("session_id")
+        correlation_key = self._pending_tools.pop(session_id, None) if session_id else None
+
         if correlation_key:
             # Add error attributes
             span = self._span_manager.get_active_span(correlation_key)
@@ -366,7 +377,9 @@ class OTelHook:
         if not self.config.traces_enabled:
             return HookResult(action="continue")
 
-        correlation_key = data.get("_otel_correlation_key")
+        session_id = data.get("session_id")
+        # Provider errors relate to LLM operations
+        correlation_key = self._pending_llm.pop(session_id, None) if session_id else None
 
         if correlation_key:
             error_data = data.get("error", {})
