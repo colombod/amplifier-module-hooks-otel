@@ -1,0 +1,63 @@
+[project]
+name = "amplifier-module-hooks-otel"
+version = "0.1.0"
+description = "OpenTelemetry observability hook for Amplifier - traces and metrics following GenAI semantic conventions"
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Diego Colombo" },
+]
+dependencies = [
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-semantic-conventions>=0.41b0",
+]
+
+[project.optional-dependencies]
+otlp = [
+    "opentelemetry-exporter-otlp>=1.20.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "amplifier-core",
+]
+
+[project.entry-points."amplifier.modules"]
+hooks-otel = "amplifier_module_hooks_otel:mount"
+
+[build-system]
+requires = [
+    "hatchling",
+]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "amplifier_module_hooks_otel",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "C4", "UP"]
+ignore = ["E501"]
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
