@@ -225,6 +225,18 @@ amplifier.session (root)
 └── cancellation (if cancelled)
 ```
 
+### Recipe Tracing
+
+Recipe executions appear as `execute_tool recipes` spans, providing visibility into when recipes run and their overall duration:
+
+```
+amplifier.session
+└── amplifier.turn
+    └── execute_tool recipes    ← Recipe execution visible here
+```
+
+> **Note:** Individual recipe steps and stage transitions are not yet traced at a granular level. Deep integration with recipe internals (step-by-step spans, stage approvals, etc.) is planned for future work and will require coordination with the recipes module to emit dedicated events.
+
 ## Metrics Recorded
 
 | Metric | Type | Unit | Description |
