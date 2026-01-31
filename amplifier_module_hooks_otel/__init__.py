@@ -152,6 +152,7 @@ class OTelHook:
             self._pending_plans: dict[str, str] = {}
             self._pending_approvals: dict[str, str] = {}
             self._pending_cancellations: dict[str, str] = {}
+            self._fork_parent_map: dict[str, str] = {}
             return
 
         # Get tracer and meter from global providers (app configures these)
@@ -176,8 +177,19 @@ class OTelHook:
         self._pending_approvals: dict[str, str] = {}  # session_id → correlation_key
         self._pending_cancellations: dict[str, str] = {}  # session_id → correlation_key
 
+        # Parent-child session mapping for trace context propagation
+        # When session:fork is received, we record the parent so that when
+        # session:start is received for the child, we can link the traces
+        self._fork_parent_map: dict[str, str] = {}  # child_session_id → parent_session_id
+
     async def on_session_start(self, event: str, data: dict[str, Any]) -> HookResult:
-        """Handle session:start - create root span.
+        """Handle session:start - create root span with trace context propagation.
+
+        For child sessions (spawned via session:fork), this links the child's
+        span to the parent session's trace, ensuring:
+        - Same trace_id across parent and child (W3C Trace Context)
+        - Proper parent_id linking for distributed tracing
+        - Full trace hierarchy visibility in APM tools
 
         Args:
             event: Event name.
@@ -194,8 +206,15 @@ class OTelHook:
         if not session_id:
             return HookResult(action="continue")
 
+        # Check if this session was forked from a parent (recorded in session:fork)
+        parent_session_id = self._fork_parent_map.pop(session_id, None)
+
         attrs = AttributeMapper.for_session(data)
-        self._span_manager.start_session_span(session_id, attrs)  # type: ignore[union-attr]
+        if parent_session_id:
+            attrs["amplifier.session.parent_id"] = parent_session_id
+
+        # Create session span, linking to parent if this is a forked session
+        self._span_manager.start_session_span(session_id, attrs, parent_session_id)  # type: ignore[union-attr]
 
         return HookResult(action="continue")
 
@@ -471,11 +490,20 @@ class OTelHook:
     # ========== Session Fork/Resume (Agent Spawning) ==========
 
     async def on_session_fork(self, event: str, data: dict[str, Any]) -> HookResult:
-        """Handle session:fork - create child session span (agent spawning).
+        """Handle session:fork - record parent-child relationship for trace linking.
+
+        This event is emitted when a child session is spawned (e.g., via task tool).
+        We record the parent-child relationship here so that when session:start
+        is emitted for the child, we can properly link the traces.
+
+        W3C Trace Context Propagation:
+        - The child session's span will have the same trace_id as parent
+        - The parent_id (span_id) will point to the parent session's span
+        - This enables full distributed tracing across agent spawning
 
         Args:
             event: Event name.
-            data: Event data containing session_id, parent_id, agent info.
+            data: Event data containing session_id (child), parent (parent session ID).
 
         Returns:
             HookResult with action="continue".
@@ -483,13 +511,15 @@ class OTelHook:
         if not self.config.enabled or not self.config.traces_enabled:
             return HookResult(action="continue")
 
-        session_id = data.get("session_id")
-        if not session_id:
-            return HookResult(action="continue")
+        child_session_id = data.get("session_id")
+        parent_session_id = data.get("parent")  # Amplifier uses "parent" for parent session ID
 
-        # Create a new session span for the forked/child session
-        attrs = AttributeMapper.for_session_fork(data)
-        self._span_manager.start_session_span(session_id, attrs)  # type: ignore[union-attr]
+        if child_session_id and parent_session_id:
+            # Record the relationship - session:start will use this to link traces
+            self._fork_parent_map[child_session_id] = parent_session_id
+            logger.debug(
+                f"Recorded fork: child={child_session_id} parent={parent_session_id}"
+            )
 
         return HookResult(action="continue")
 

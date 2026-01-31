@@ -33,25 +33,72 @@ class SpanManager:
         self._active_spans: dict[str, Span] = {}  # correlation_key → span
         self._turn_counters: dict[str, int] = {}  # session_id → turn number
 
-    def start_session_span(self, session_id: str, attributes: dict[str, Any]) -> Span:
-        """Start root span for session.
+    def start_session_span(
+        self,
+        session_id: str,
+        attributes: dict[str, Any],
+        parent_session_id: str | None = None,
+    ) -> Span:
+        """Start root span for session, optionally as child of another session.
+
+        For child sessions (spawned via session:fork), the parent_session_id
+        links this span to the parent's trace. This ensures:
+        - Same trace_id across parent and child sessions
+        - Proper parent_id (span_id) linking in W3C Trace Context
+        - Distributed trace continuity for agent spawning
 
         Args:
             session_id: The session identifier.
             attributes: Span attributes to set.
+            parent_session_id: Optional parent session ID for trace linking.
 
         Returns:
             The created session span.
         """
+        context = None
+
+        # If this is a child session, link to parent's span for trace continuity
+        if parent_session_id:
+            parent_span = self._session_spans.get(parent_session_id)
+            if parent_span:
+                # Create context with parent span - this propagates trace_id
+                # and sets parent_id to the parent span's span_id
+                context = trace.set_span_in_context(parent_span)
+                logger.debug(
+                    f"Linking child session {session_id} to parent {parent_session_id}"
+                )
+            else:
+                logger.warning(
+                    f"Parent session span not found for {parent_session_id}, "
+                    f"child {session_id} will start new trace"
+                )
+
         span = self._tracer.start_span(
             "amplifier.session",
             kind=SpanKind.SERVER,
             attributes=attributes,
+            context=context,
         )
         self._session_spans[session_id] = span
         self._turn_counters[session_id] = 0
         logger.debug(f"Started session span for {session_id}")
         return span
+
+    def get_span_context(self, session_id: str) -> trace.SpanContext | None:
+        """Get the SpanContext for a session's span.
+
+        This can be used to extract trace_id and span_id for propagation
+        or correlation purposes.
+
+        Args:
+            session_id: The session identifier.
+
+        Returns:
+            The SpanContext if the session span exists, None otherwise.
+        """
+        if span := self._session_spans.get(session_id):
+            return span.get_span_context()
+        return None
 
     def end_session_span(self, session_id: str) -> None:
         """End session span.

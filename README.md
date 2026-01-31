@@ -225,6 +225,42 @@ amplifier.session (root)
 └── cancellation (if cancelled)
 ```
 
+### W3C Trace Context Propagation
+
+When agents spawn child sessions (via `session:fork`), trace context is automatically propagated following the [W3C Trace Context](https://www.w3.org/TR/trace-context/) specification:
+
+| Field | Behavior |
+|-------|----------|
+| `trace_id` | **Same** across parent and all child sessions - identifies the entire distributed trace |
+| `parent_id` (span_id) | Child session's span links to parent session's span |
+| `trace_flags` | Inherited from parent (sampling decisions propagate) |
+
+This enables:
+- **Full trace hierarchy visibility** - See agent spawning chains in your APM (Jaeger, Zipkin, Aspire)
+- **Cross-session correlation** - All spans from a request share the same `trace_id`
+- **Distributed tracing integration** - Works with any W3C-compliant observability backend
+
+**Example trace with nested agent spawning:**
+```
+trace_id: abc123...  (same for entire tree)
+
+amplifier.session (root)                    span_id: 001
+└── execute_tool task
+    └── amplifier.session (child agent)    span_id: 002, parent_id: 001
+        └── execute_tool task
+            └── amplifier.session (grandchild) span_id: 003, parent_id: 002
+```
+
+**Extracting trace context programmatically:**
+```python
+# Get span context for external correlation
+span_context = span_manager.get_span_context(session_id)
+if span_context:
+    trace_id = format(span_context.trace_id, '032x')
+    span_id = format(span_context.span_id, '016x')
+    # Use for correlation with external systems
+```
+
 ### Recipe Tracing
 
 Recipe executions appear as `execute_tool recipes` spans, providing visibility into when recipes run and their overall duration:

@@ -188,3 +188,133 @@ class TestSpanManagerChildSpans:
 
         nonexistent = span_manager.get_active_span("nonexistent")
         assert nonexistent is None
+
+
+class TestSpanManagerTraceContextPropagation:
+    """Tests for W3C Trace Context propagation across parent-child sessions."""
+
+    def test_child_session_inherits_parent_trace_id(self, span_manager, span_exporter):
+        """Child session span should have the same trace_id as parent."""
+        # Start parent session
+        parent_span = span_manager.start_session_span(
+            "parent-session", {"amplifier.session.id": "parent-session"}
+        )
+        parent_trace_id = parent_span.get_span_context().trace_id
+
+        # Start child session with parent linkage
+        child_span = span_manager.start_session_span(
+            "child-session",
+            {"amplifier.session.id": "child-session"},
+            parent_session_id="parent-session",
+        )
+        child_trace_id = child_span.get_span_context().trace_id
+
+        # Same trace_id = same distributed trace
+        assert child_trace_id == parent_trace_id
+
+    def test_child_session_has_parent_as_parent_span(self, span_manager, span_exporter):
+        """Child session's parent_id should be the parent session's span_id."""
+        # Start parent session
+        parent_span = span_manager.start_session_span(
+            "parent-session", {"amplifier.session.id": "parent-session"}
+        )
+        parent_span_id = parent_span.get_span_context().span_id
+
+        # Start child session with parent linkage
+        # We need to create the span but verify via exported spans
+        span_manager.start_session_span(
+            "child-session",
+            {"amplifier.session.id": "child-session"},
+            parent_session_id="parent-session",
+        )
+
+        # End both to export
+        span_manager.end_session_span("child-session")
+        span_manager.end_session_span("parent-session")
+
+        # Verify parent-child relationship in exported spans
+        spans = span_exporter.get_finished_spans()
+        child_exported = next(s for s in spans if "child-session" in str(s.attributes))
+
+        # Child's parent should be the parent session's span
+        assert child_exported.parent is not None
+        assert child_exported.parent.span_id == parent_span_id
+
+    def test_child_without_valid_parent_starts_new_trace(self, span_manager, span_exporter):
+        """Child session with non-existent parent starts a new trace (graceful fallback)."""
+        # Start child with non-existent parent
+        child_span = span_manager.start_session_span(
+            "orphan-session",
+            {"amplifier.session.id": "orphan-session"},
+            parent_session_id="nonexistent-parent",
+        )
+
+        # Should still create a span (new trace)
+        assert child_span is not None
+        assert child_span.get_span_context().is_valid
+
+        # End and export
+        span_manager.end_session_span("orphan-session")
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        # No parent = root span
+        assert spans[0].parent is None
+
+    def test_get_span_context_returns_valid_context(self, span_manager):
+        """get_span_context should return valid SpanContext for active sessions."""
+        span_manager.start_session_span("session-123", {})
+
+        context = span_manager.get_span_context("session-123")
+        assert context is not None
+        assert context.is_valid
+        assert context.trace_id != 0
+        assert context.span_id != 0
+
+    def test_get_span_context_returns_none_for_unknown_session(self, span_manager):
+        """get_span_context should return None for non-existent sessions."""
+        context = span_manager.get_span_context("unknown-session")
+        assert context is None
+
+    def test_nested_agent_spawning_maintains_trace_hierarchy(
+        self, span_manager, span_exporter
+    ):
+        """Multiple levels of agent spawning should maintain full trace hierarchy."""
+        # Root session
+        root_span = span_manager.start_session_span("root", {})
+        root_trace_id = root_span.get_span_context().trace_id
+
+        # Child session (agent spawn)
+        child_span = span_manager.start_session_span(
+            "child", {}, parent_session_id="root"
+        )
+
+        # Grandchild session (nested agent spawn)
+        grandchild_span = span_manager.start_session_span(
+            "grandchild", {}, parent_session_id="child"
+        )
+
+        # All should share the same trace_id (W3C Trace Context propagation)
+        assert child_span.get_span_context().trace_id == root_trace_id
+        assert grandchild_span.get_span_context().trace_id == root_trace_id
+
+        # End all spans
+        span_manager.end_session_span("grandchild")
+        span_manager.end_session_span("child")
+        span_manager.end_session_span("root")
+
+        # Verify hierarchy in exported spans
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 3
+
+        # Find each span
+        root_exported = next(s for s in spans if s.parent is None)
+        child_exported = next(
+            s for s in spans if s.parent and s.parent.span_id == root_exported.context.span_id
+        )
+        grandchild_exported = next(
+            s for s in spans if s.parent and s.parent.span_id == child_exported.context.span_id
+        )
+
+        # Verify chain
+        assert grandchild_exported.parent.span_id == child_exported.context.span_id
+        assert child_exported.parent.span_id == root_exported.context.span_id
