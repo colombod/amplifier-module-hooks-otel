@@ -17,14 +17,14 @@ def hook():
 @pytest.fixture
 def hook_no_metrics():
     """Create an OTelHook with metrics disabled."""
-    config = OTelConfig(metrics_enabled=False)
+    config = OTelConfig.from_dict({"capture": {"traces": True, "metrics": False}})
     return OTelHook(config)
 
 
 @pytest.fixture
 def hook_no_traces():
     """Create an OTelHook with traces disabled."""
-    config = OTelConfig(traces_enabled=False)
+    config = OTelConfig.from_dict({"capture": {"traces": False, "metrics": True}})
     return OTelHook(config)
 
 
@@ -388,15 +388,21 @@ class TestOTelConfig:
     def test_is_active_property(self):
         """is_active returns True only when enabled AND features active."""
         # Fully enabled
-        config = OTelConfig(enabled=True, traces_enabled=True, metrics_enabled=True)
+        config = OTelConfig.from_dict(
+            {"enabled": True, "capture": {"traces": True, "metrics": True}}
+        )
         assert config.is_active is True
 
         # Disabled globally
-        config = OTelConfig(enabled=False, traces_enabled=True, metrics_enabled=True)
+        config = OTelConfig.from_dict(
+            {"enabled": False, "capture": {"traces": True, "metrics": True}}
+        )
         assert config.is_active is False
 
         # Enabled but no features
-        config = OTelConfig(enabled=True, traces_enabled=False, metrics_enabled=False)
+        config = OTelConfig.from_dict(
+            {"enabled": True, "capture": {"traces": False, "metrics": False}}
+        )
         assert config.is_active is False
 
 

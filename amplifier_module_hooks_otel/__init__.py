@@ -995,59 +995,75 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
         coordinator: ModuleCoordinator for registering hooks.
         config: Optional configuration dictionary.
     """
+    from .exporters import setup_metrics, setup_tracing
+
     config_dict = config or {}
-    otel_config = OTelConfig.from_dict(config_dict)
-    priority = int(config_dict.get("priority", 1000))  # Run after business hooks
+    otel_config = OTelConfig.from_dict(config_dict.copy())
+
+    # Set up exporters if enabled
+    if otel_config.enabled:
+        if otel_config.traces_enabled:
+            setup_tracing(otel_config)
+        if otel_config.metrics_enabled:
+            setup_metrics(otel_config)
 
     hook = OTelHook(otel_config)
 
-    # Map events to handlers
-    event_handlers = {
-        # Session lifecycle
-        SESSION_START: hook.on_session_start,
-        SESSION_END: hook.on_session_end,
-        SESSION_FORK: hook.on_session_fork,
-        SESSION_RESUME: hook.on_session_resume,
-        # Prompt lifecycle
-        PROMPT_SUBMIT: hook.on_prompt_submit,
-        PROMPT_COMPLETE: hook.on_prompt_complete,
-        # Planning
-        PLAN_START: hook.on_plan_start,
-        PLAN_END: hook.on_plan_end,
-        # Execution
-        EXECUTION_START: hook.on_execution_start,
-        EXECUTION_END: hook.on_execution_end,
-        ORCHESTRATOR_COMPLETE: hook.on_orchestrator_complete,
-        # LLM
-        LLM_REQUEST: hook.on_llm_request,
-        LLM_RESPONSE: hook.on_llm_response,
-        PROVIDER_ERROR: hook.on_provider_error,
-        # Tools
-        TOOL_PRE: hook.on_tool_pre,
-        TOOL_POST: hook.on_tool_post,
-        TOOL_ERROR: hook.on_tool_error,
-        # Context
-        CONTEXT_COMPACTION: hook.on_context_compaction,
-        CONTEXT_INCLUDE: hook.on_context_include,
-        # Approvals
-        APPROVAL_REQUIRED: hook.on_approval_required,
-        APPROVAL_GRANTED: hook.on_approval_granted,
-        APPROVAL_DENIED: hook.on_approval_denied,
-        # Cancellation
-        CANCEL_REQUESTED: hook.on_cancel_requested,
-        CANCEL_COMPLETED: hook.on_cancel_completed,
-        # Artifacts
-        ARTIFACT_WRITE: hook.on_artifact_write,
-        ARTIFACT_READ: hook.on_artifact_read,
-        # Policy
-        POLICY_VIOLATION: hook.on_policy_violation,
-    }
+    # Priority-based registration:
+    # - Low priority (5) for start events: see events early
+    # - High priority (95) for end events: see final state
+    # - Medium priority (50) for instant/informational events
+    PRIORITY_LOW = 5  # Start events - observe early
+    PRIORITY_MED = 50  # Instant events
+    PRIORITY_HIGH = 95  # End events - capture final state
 
-    # Register handlers
-    for event, handler in event_handlers.items():
+    # Event registrations: (event, handler, priority)
+    event_registrations: list[tuple[str, Any, int]] = [
+        # Session lifecycle - start early, end late
+        (SESSION_START, hook.on_session_start, PRIORITY_LOW),
+        (SESSION_END, hook.on_session_end, PRIORITY_HIGH),
+        (SESSION_FORK, hook.on_session_fork, PRIORITY_LOW),
+        (SESSION_RESUME, hook.on_session_resume, PRIORITY_LOW),
+        # Prompt lifecycle
+        (PROMPT_SUBMIT, hook.on_prompt_submit, PRIORITY_LOW),
+        (PROMPT_COMPLETE, hook.on_prompt_complete, PRIORITY_HIGH),
+        # Planning
+        (PLAN_START, hook.on_plan_start, PRIORITY_LOW),
+        (PLAN_END, hook.on_plan_end, PRIORITY_HIGH),
+        # Execution - start early, end late
+        (EXECUTION_START, hook.on_execution_start, PRIORITY_LOW),
+        (EXECUTION_END, hook.on_execution_end, PRIORITY_HIGH),
+        (ORCHESTRATOR_COMPLETE, hook.on_orchestrator_complete, PRIORITY_HIGH),
+        # LLM - request early, response late
+        (LLM_REQUEST, hook.on_llm_request, PRIORITY_LOW),
+        (LLM_RESPONSE, hook.on_llm_response, PRIORITY_HIGH),
+        (PROVIDER_ERROR, hook.on_provider_error, PRIORITY_HIGH),
+        # Tools - pre early, post late
+        (TOOL_PRE, hook.on_tool_pre, PRIORITY_LOW),
+        (TOOL_POST, hook.on_tool_post, PRIORITY_HIGH),
+        (TOOL_ERROR, hook.on_tool_error, PRIORITY_HIGH),
+        # Context - instant events
+        (CONTEXT_COMPACTION, hook.on_context_compaction, PRIORITY_MED),
+        (CONTEXT_INCLUDE, hook.on_context_include, PRIORITY_MED),
+        # Approvals
+        (APPROVAL_REQUIRED, hook.on_approval_required, PRIORITY_LOW),
+        (APPROVAL_GRANTED, hook.on_approval_granted, PRIORITY_HIGH),
+        (APPROVAL_DENIED, hook.on_approval_denied, PRIORITY_HIGH),
+        # Cancellation
+        (CANCEL_REQUESTED, hook.on_cancel_requested, PRIORITY_LOW),
+        (CANCEL_COMPLETED, hook.on_cancel_completed, PRIORITY_HIGH),
+        # Artifacts - instant events
+        (ARTIFACT_WRITE, hook.on_artifact_write, PRIORITY_MED),
+        (ARTIFACT_READ, hook.on_artifact_read, PRIORITY_MED),
+        # Policy - instant event
+        (POLICY_VIOLATION, hook.on_policy_violation, PRIORITY_MED),
+    ]
+
+    # Register handlers with appropriate priorities
+    for event, handler, priority in event_registrations:
         coordinator.hooks.register(event, handler, priority=priority, name="hooks-otel")
 
     logger.info(
-        f"Mounted hooks-otel (traces={otel_config.traces_enabled}, "
-        f"metrics={otel_config.metrics_enabled})"
+        f"Mounted hooks-otel (exporter={otel_config.exporter}, "
+        f"traces={otel_config.traces_enabled}, metrics={otel_config.metrics_enabled})"
     )

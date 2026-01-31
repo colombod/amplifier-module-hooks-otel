@@ -52,8 +52,14 @@ Add to your Amplifier settings file (`~/.amplifier/settings.yaml`):
 hooks:
   - module: hooks-otel
     config:
-      traces_enabled: true   # Enable span creation (default: true)
-      metrics_enabled: true  # Enable metrics recording (default: true)
+      enabled: true
+      exporter: console        # console, otlp-http, otlp-grpc, file
+      endpoint: http://localhost:4318  # OTLP endpoint
+      service_name: my-amplifier-app
+      capture:
+        traces: true
+        metrics: true
+        span_events: true
 ```
 
 ### Configuration Options
@@ -61,8 +67,31 @@ hooks:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enabled` | bool | `true` | Master switch - disables all telemetry when false |
-| `traces_enabled` | bool | `true` | Enable/disable span creation |
-| `metrics_enabled` | bool | `true` | Enable/disable metrics recording |
+| `exporter` | string | `console` | Exporter type: `console`, `otlp-http`, `otlp-grpc`, `file` |
+| `endpoint` | string | `http://localhost:4318` | OTLP collector endpoint |
+| `service_name` | string | `amplifier` | Service name in traces |
+| `service_version` | string | `0.1.0` | Service version |
+| `user_id` | string | `$USER` | User identifier for tracking |
+| `team_id` | string | `""` | Team identifier for grouping in APM |
+| `headers` | dict | `{}` | HTTP headers for OTLP (auth tokens) |
+| `file_path` | string | `/tmp/amplifier-traces.jsonl` | Output path for file exporter |
+| `sampling_rate` | float | `1.0` | Sampling rate 0.0-1.0 (1.0 = 100%) |
+| `capture.traces` | bool | `true` | Enable/disable span creation |
+| `capture.metrics` | bool | `true` | Enable/disable metrics recording |
+| `capture.span_events` | bool | `true` | Enable/disable span events |
+| `max_attribute_length` | int | `1000` | Max attribute value length |
+| `batch_delay_ms` | int | `5000` | Batch export delay (ms) |
+| `max_batch_size` | int | `512` | Maximum spans per batch |
+| `debug` | bool | `false` | Enable debug output |
+
+### Exporter Types
+
+| Exporter | Use Case | Description |
+|----------|----------|-------------|
+| `console` | Development | Prints spans to stdout |
+| `otlp-http` | Production | Sends to OTLP collector via HTTP (Jaeger, Aspire) |
+| `otlp-grpc` | Production | Sends to OTLP collector via gRPC (high throughput) |
+| `file` | Debugging | Writes spans to JSONL file |
 
 ### Opt-Out via Environment Variable
 
@@ -84,100 +113,71 @@ The environment variable **takes precedence** over configuration settings. This 
 - Privacy-sensitive deployments
 - Troubleshooting (temporarily disable to isolate issues)
 
-## Application-Side OTel Setup
+## Quick Start Examples
 
-This module emits telemetry to the **global OpenTelemetry providers**. Your application must configure where telemetry goes (console, OTLP, Jaeger, etc.).
+The module now handles exporter configuration automatically. Just specify the exporter type in config.
 
-### Basic Console Export (Development)
+### Console Output (Development)
 
-```python
-from opentelemetry import trace, metrics
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import ConsoleMetricExporter, PeriodicExportingMetricReader
-
-# Set up tracing to console
-trace_provider = TracerProvider()
-trace_provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
-trace.set_tracer_provider(trace_provider)
-
-# Set up metrics to console
-metric_reader = PeriodicExportingMetricReader(ConsoleMetricExporter())
-metrics.set_meter_provider(MeterProvider(metric_readers=[metric_reader]))
-
-# Now run Amplifier - spans and metrics will print to console
+```yaml
+hooks:
+  - module: hooks-otel
+    config:
+      exporter: console
+      debug: true
 ```
 
-### OTLP Export (Production / .NET Aspire)
+### Jaeger / OTLP Collector
 
-```python
-from opentelemetry import trace, metrics
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-
-# Configure OTLP endpoint (e.g., .NET Aspire dashboard, Jaeger, etc.)
-OTLP_ENDPOINT = "http://localhost:4317"
-
-# Set up tracing
-trace_provider = TracerProvider()
-trace_provider.add_span_processor(
-    BatchSpanProcessor(OTLPSpanExporter(endpoint=OTLP_ENDPOINT))
-)
-trace.set_tracer_provider(trace_provider)
-
-# Set up metrics
-metric_reader = PeriodicExportingMetricReader(
-    OTLPMetricExporter(endpoint=OTLP_ENDPOINT)
-)
-metrics.set_meter_provider(MeterProvider(metric_readers=[metric_reader]))
-
-# Now run Amplifier - telemetry goes to OTLP collector
+```yaml
+hooks:
+  - module: hooks-otel
+    config:
+      exporter: otlp-http
+      endpoint: http://localhost:4318
+      service_name: my-agent
 ```
 
 ### .NET Aspire Integration
 
-When running Amplifier as part of a .NET Aspire application:
+```yaml
+hooks:
+  - module: hooks-otel
+    config:
+      exporter: otlp-http
+      endpoint: http://localhost:18889  # Aspire dashboard
+      service_name: amplifier-agent
+```
 
-1. **Aspire provides the OTLP endpoint** - typically `http://localhost:4317`
-2. **Configure Python app** with the OTLP exporter (see above)
-3. **Telemetry appears in Aspire dashboard** alongside .NET services
+### File Output (Debugging)
+
+```yaml
+hooks:
+  - module: hooks-otel
+    config:
+      exporter: file
+      file_path: ./traces.jsonl
+```
+
+### Advanced: Custom Application Setup
+
+For advanced scenarios where you need full control over OTel configuration, you can configure exporters at the application level instead:
 
 ```python
-import os
 from opentelemetry import trace, metrics
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-from opentelemetry.sdk.resources import Resource
 
-# Aspire sets OTEL_EXPORTER_OTLP_ENDPOINT environment variable
-otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
-
-# Create resource with service name (appears in Aspire dashboard)
-resource = Resource.create({"service.name": "amplifier-agent"})
-
-# Set up tracing
-trace_provider = TracerProvider(resource=resource)
+# Custom setup - module will use these global providers
+trace_provider = TracerProvider()
 trace_provider.add_span_processor(
-    BatchSpanProcessor(OTLPSpanExporter(endpoint=otlp_endpoint))
+    BatchSpanProcessor(OTLPSpanExporter(endpoint="http://localhost:4317"))
 )
 trace.set_tracer_provider(trace_provider)
 
-# Set up metrics
-metric_reader = PeriodicExportingMetricReader(
-    OTLPMetricExporter(endpoint=otlp_endpoint)
-)
-metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=[metric_reader]))
-
-# Run Amplifier - traces appear in Aspire dashboard
+# Then configure hooks-otel with exporter: console (or omit exporter config)
+# The module will emit to the globally configured providers
 ```
 
 ## Spans Created
