@@ -117,3 +117,232 @@ class AttributeMapper:
             else:
                 attrs["error.type"] = type(error).__name__
         return attrs
+
+    # ========== Session Fork/Resume ==========
+
+    @staticmethod
+    def for_session_fork(data: dict[str, Any]) -> dict[str, Any]:
+        """Map session:fork data to span attributes (agent spawning).
+
+        Args:
+            data: Event data from session:fork event.
+
+        Returns:
+            Dictionary of OTel attributes for child session span.
+        """
+        attrs: dict[str, Any] = {
+            AttributeMapper.GEN_AI_PROVIDER_NAME: "amplifier",
+            "amplifier.session.type": "fork",
+        }
+        if session_id := data.get("session_id"):
+            attrs[AttributeMapper.AMPLIFIER_SESSION_ID] = session_id
+        if parent_id := data.get("parent_id"):
+            attrs["amplifier.session.parent_id"] = parent_id
+        if agent := data.get("agent"):
+            attrs["amplifier.agent.name"] = agent
+        return attrs
+
+    @staticmethod
+    def for_session_resume(data: dict[str, Any]) -> dict[str, Any]:
+        """Map session:resume data to span attributes.
+
+        Args:
+            data: Event data from session:resume event.
+
+        Returns:
+            Dictionary of OTel attributes for resumed session span.
+        """
+        attrs: dict[str, Any] = {
+            AttributeMapper.GEN_AI_PROVIDER_NAME: "amplifier",
+            "amplifier.session.type": "resume",
+        }
+        if session_id := data.get("session_id"):
+            attrs[AttributeMapper.AMPLIFIER_SESSION_ID] = session_id
+        return attrs
+
+    # ========== Prompt Lifecycle ==========
+
+    @staticmethod
+    def for_prompt(data: dict[str, Any]) -> dict[str, Any]:
+        """Map prompt:submit data to span attributes.
+
+        Args:
+            data: Event data from prompt:submit event.
+
+        Returns:
+            Dictionary of OTel attributes for prompt span.
+        """
+        attrs: dict[str, Any] = {
+            AttributeMapper.GEN_AI_OPERATION_NAME: "prompt",
+        }
+        if session_id := data.get("session_id"):
+            attrs[AttributeMapper.AMPLIFIER_SESSION_ID] = session_id
+        # Don't include prompt content for privacy
+        if prompt := data.get("prompt"):
+            attrs["amplifier.prompt.length"] = len(prompt)
+        return attrs
+
+    # ========== Planning ==========
+
+    @staticmethod
+    def for_plan(data: dict[str, Any]) -> dict[str, Any]:
+        """Map plan:start data to span attributes.
+
+        Args:
+            data: Event data from plan:start event.
+
+        Returns:
+            Dictionary of OTel attributes for plan span.
+        """
+        attrs: dict[str, Any] = {
+            AttributeMapper.GEN_AI_OPERATION_NAME: "plan",
+        }
+        if session_id := data.get("session_id"):
+            attrs[AttributeMapper.AMPLIFIER_SESSION_ID] = session_id
+        if plan_type := data.get("plan_type"):
+            attrs["amplifier.plan.type"] = plan_type
+        return attrs
+
+    # ========== Context Management ==========
+
+    @staticmethod
+    def for_context_compaction(data: dict[str, Any]) -> dict[str, Any]:
+        """Map context:compaction data to span attributes.
+
+        Args:
+            data: Event data from context:compaction event.
+
+        Returns:
+            Dictionary of OTel attributes for compaction span.
+        """
+        attrs: dict[str, Any] = {
+            AttributeMapper.GEN_AI_OPERATION_NAME: "context_compaction",
+        }
+        if session_id := data.get("session_id"):
+            attrs[AttributeMapper.AMPLIFIER_SESSION_ID] = session_id
+        if tokens_before := data.get("tokens_before"):
+            attrs["amplifier.context.tokens_before"] = tokens_before
+        if tokens_after := data.get("tokens_after"):
+            attrs["amplifier.context.tokens_after"] = tokens_after
+        if messages_removed := data.get("messages_removed"):
+            attrs["amplifier.context.messages_removed"] = messages_removed
+        return attrs
+
+    @staticmethod
+    def for_context_include(data: dict[str, Any]) -> dict[str, Any]:
+        """Map context:include data to span attributes.
+
+        Args:
+            data: Event data from context:include event.
+
+        Returns:
+            Dictionary of OTel attributes for include span.
+        """
+        attrs: dict[str, Any] = {
+            AttributeMapper.GEN_AI_OPERATION_NAME: "context_include",
+        }
+        if session_id := data.get("session_id"):
+            attrs[AttributeMapper.AMPLIFIER_SESSION_ID] = session_id
+        if source := data.get("source"):
+            attrs["amplifier.context.include_source"] = source
+        if path := data.get("path"):
+            attrs["amplifier.context.include_path"] = path
+        return attrs
+
+    # ========== Approvals ==========
+
+    @staticmethod
+    def for_approval(data: dict[str, Any]) -> dict[str, Any]:
+        """Map approval:required data to span attributes.
+
+        Args:
+            data: Event data from approval:required event.
+
+        Returns:
+            Dictionary of OTel attributes for approval span.
+        """
+        attrs: dict[str, Any] = {
+            AttributeMapper.GEN_AI_OPERATION_NAME: "approval",
+        }
+        if session_id := data.get("session_id"):
+            attrs[AttributeMapper.AMPLIFIER_SESSION_ID] = session_id
+        if approval_type := data.get("type"):
+            attrs["amplifier.approval.type"] = approval_type
+        if tool_name := data.get("tool_name"):
+            attrs["amplifier.approval.tool"] = tool_name
+        return attrs
+
+    # ========== Cancellation ==========
+
+    @staticmethod
+    def for_cancellation(data: dict[str, Any]) -> dict[str, Any]:
+        """Map cancel:requested data to span attributes.
+
+        Args:
+            data: Event data from cancel:requested event.
+
+        Returns:
+            Dictionary of OTel attributes for cancellation span.
+        """
+        attrs: dict[str, Any] = {
+            AttributeMapper.GEN_AI_OPERATION_NAME: "cancellation",
+        }
+        if session_id := data.get("session_id"):
+            attrs[AttributeMapper.AMPLIFIER_SESSION_ID] = session_id
+        if immediate := data.get("immediate"):
+            attrs["amplifier.cancel.immediate"] = immediate
+        if reason := data.get("reason"):
+            attrs["amplifier.cancel.reason"] = reason
+        return attrs
+
+    # ========== Artifacts ==========
+
+    @staticmethod
+    def for_artifact(data: dict[str, Any], operation: str) -> dict[str, Any]:
+        """Map artifact:read/write data to span attributes.
+
+        Args:
+            data: Event data from artifact event.
+            operation: Either "read" or "write".
+
+        Returns:
+            Dictionary of OTel attributes for artifact span.
+        """
+        attrs: dict[str, Any] = {
+            AttributeMapper.GEN_AI_OPERATION_NAME: f"artifact_{operation}",
+            "amplifier.artifact.operation": operation,
+        }
+        if session_id := data.get("session_id"):
+            attrs[AttributeMapper.AMPLIFIER_SESSION_ID] = session_id
+        if path := data.get("path"):
+            attrs["amplifier.artifact.path"] = path
+        if artifact_type := data.get("type"):
+            attrs["amplifier.artifact.type"] = artifact_type
+        if size := data.get("size"):
+            attrs["amplifier.artifact.size"] = size
+        return attrs
+
+    # ========== Policy ==========
+
+    @staticmethod
+    def for_policy_violation(data: dict[str, Any]) -> dict[str, Any]:
+        """Map policy:violation data to span attributes.
+
+        Args:
+            data: Event data from policy:violation event.
+
+        Returns:
+            Dictionary of OTel attributes for policy violation span.
+        """
+        attrs: dict[str, Any] = {
+            AttributeMapper.GEN_AI_OPERATION_NAME: "policy_violation",
+        }
+        if session_id := data.get("session_id"):
+            attrs[AttributeMapper.AMPLIFIER_SESSION_ID] = session_id
+        if violation_type := data.get("violation_type"):
+            attrs["amplifier.policy.violation_type"] = violation_type
+        if policy := data.get("policy"):
+            attrs["amplifier.policy.name"] = policy
+        if tool_name := data.get("tool_name"):
+            attrs["amplifier.policy.tool"] = tool_name
+        return attrs

@@ -6,12 +6,21 @@ Provides OpenTelemetry observability for Amplifier agents through lifecycle even
 
 This hook module integrates with Amplifier's hook system to emit OpenTelemetry spans and metrics for agent lifecycle events, following [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/).
 
-**Events Traced:**
-- Session start/end
-- Execution turns
-- LLM requests/responses (with token usage)
-- Tool invocations and errors
-- Provider errors
+**Events Traced (Full Kernel Coverage):**
+
+| Category | Events | Span/Metric |
+|----------|--------|-------------|
+| **Session Lifecycle** | `session:start`, `session:end`, `session:fork`, `session:resume` | Root spans, agent spawning |
+| **Prompt Lifecycle** | `prompt:submit`, `prompt:complete` | Prompt processing spans |
+| **Planning** | `plan:start`, `plan:end` | Planning phase spans |
+| **Execution** | `execution:start`, `execution:end`, `orchestrator:complete` | Turn spans |
+| **LLM Calls** | `llm:request`, `llm:response`, `provider:error` | GenAI spans + token metrics |
+| **Tool Invocations** | `tool:pre`, `tool:post`, `tool:error` | Tool execution spans |
+| **Context Management** | `context:compaction`, `context:include` | Context operation spans |
+| **Approvals** | `approval:required`, `approval:granted`, `approval:denied` | Human-in-loop spans |
+| **Cancellation** | `cancel:requested`, `cancel:completed` | Cancellation spans |
+| **Artifacts** | `artifact:read`, `artifact:write` | File operation spans |
+| **Policy** | `policy:violation` | Violation spans (error status) |
 
 **Design Philosophy:**
 - **Mechanism, not policy** - Module emits telemetry; your application configures where it goes
@@ -173,22 +182,47 @@ metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=[metr
 
 ## Spans Created
 
+### Core Spans
+
 | Kernel Event | Span Name | Kind | Key Attributes |
 |--------------|-----------|------|----------------|
-| `session:start` | `amplifier.session` | SERVER | `amplifier.session.id`, `gen_ai.system` |
+| `session:start` | `amplifier.session` | SERVER | `amplifier.session.id` |
+| `session:fork` | `amplifier.session` | SERVER | `amplifier.session.id`, `amplifier.session.parent_id`, `amplifier.agent.name` |
+| `session:resume` | `amplifier.session` | SERVER | `amplifier.session.id`, `amplifier.session.type=resume` |
 | `execution:start` | `amplifier.turn` | INTERNAL | `amplifier.turn.number` |
-| `llm:request` | `chat {model}` | CLIENT | `gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.system` |
-| `tool:pre` | `execute_tool {name}` | INTERNAL | `gen_ai.operation.name`, `amplifier.tool.name` |
+| `llm:request` | `chat {model}` | CLIENT | `gen_ai.request.model`, `gen_ai.provider.name` |
+| `tool:pre` | `execute_tool {name}` | INTERNAL | `amplifier.tool.name` |
+
+### Additional Spans
+
+| Kernel Event | Span Name | Key Attributes |
+|--------------|-----------|----------------|
+| `prompt:submit` | `prompt` | `amplifier.prompt.length` |
+| `plan:start` | `plan` | `amplifier.plan.type` |
+| `context:compaction` | `context_compaction` | `amplifier.context.tokens_before`, `amplifier.context.tokens_after` |
+| `context:include` | `context_include` | `amplifier.context.include_source`, `amplifier.context.include_path` |
+| `approval:required` | `approval_pending` | `amplifier.approval.type`, `amplifier.approval.tool` |
+| `cancel:requested` | `cancellation` | `amplifier.cancel.immediate`, `amplifier.cancel.reason` |
+| `artifact:write` | `artifact_write` | `amplifier.artifact.path`, `amplifier.artifact.type` |
+| `artifact:read` | `artifact_read` | `amplifier.artifact.path` |
+| `policy:violation` | `policy_violation` | `amplifier.policy.violation_type`, `amplifier.policy.name` |
 
 ### Span Hierarchy
 
 ```
 amplifier.session (root)
-└── amplifier.turn
-    ├── chat claude-3-opus
-    ├── execute_tool bash
-    ├── chat claude-3-opus
-    └── execute_tool read_file
+├── prompt
+├── amplifier.turn
+│   ├── chat claude-sonnet-4-20250514
+│   ├── execute_tool bash
+│   │   └── approval_pending (if approval required)
+│   ├── chat claude-sonnet-4-20250514
+│   └── execute_tool task
+│       └── amplifier.session (child - agent spawn via session:fork)
+│           └── amplifier.turn
+│               └── ...
+├── context_compaction (when context is trimmed)
+└── cancellation (if cancelled)
 ```
 
 ## Metrics Recorded
