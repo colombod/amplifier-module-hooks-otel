@@ -310,22 +310,20 @@ git clone https://github.com/colombod/amplifier-module-hooks-otel
 cd amplifier-module-hooks-otel
 
 # Create virtual environment and install dependencies
-uv venv
-source .venv/bin/activate
-uv pip install -e ".[dev]"
+uv sync --group dev
 
 # Run tests
-pytest
+uv run pytest
 
 # Run tests with coverage
-pytest --cov=amplifier_module_hooks_otel
+uv run pytest --cov=amplifier_module_hooks_otel
 
 # Type checking
-pyright
+uv run pyright
 
 # Linting and formatting
-ruff check .
-ruff format .
+uv run ruff check .
+uv run ruff format .
 ```
 
 ## License

@@ -35,10 +35,10 @@ otlp = [
 hooks-otel = "amplifier_module_hooks_otel:mount"
 
 [project.urls]
-Homepage = "https://github.com/microsoft/amplifier-module-hooks-otel"
-Documentation = "https://github.com/microsoft/amplifier-module-hooks-otel/blob/main/README.md"
-Repository = "https://github.com/microsoft/amplifier-module-hooks-otel"
-Issues = "https://github.com/microsoft/amplifier-module-hooks-otel/issues"
+Homepage = "https://github.com/colombod/amplifier-module-hooks-otel"
+Documentation = "https://github.com/colombod/amplifier-module-hooks-otel/blob/main/README.md"
+Repository = "https://github.com/colombod/amplifier-module-hooks-otel"
+Issues = "https://github.com/colombod/amplifier-module-hooks-otel/issues"
 
 [build-system]
 requires = [
