@@ -64,9 +64,7 @@ class SpanManager:
                 # Create context with parent span - this propagates trace_id
                 # and sets parent_id to the parent span's span_id
                 context = trace.set_span_in_context(parent_span)
-                logger.debug(
-                    f"Linking child session {session_id} to parent {parent_session_id}"
-                )
+                logger.debug(f"Linking child session {session_id} to parent {parent_session_id}")
             else:
                 logger.warning(
                     f"Parent session span not found for {parent_session_id}, "

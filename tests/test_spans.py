@@ -275,18 +275,14 @@ class TestSpanManagerTraceContextPropagation:
         context = span_manager.get_span_context("unknown-session")
         assert context is None
 
-    def test_nested_agent_spawning_maintains_trace_hierarchy(
-        self, span_manager, span_exporter
-    ):
+    def test_nested_agent_spawning_maintains_trace_hierarchy(self, span_manager, span_exporter):
         """Multiple levels of agent spawning should maintain full trace hierarchy."""
         # Root session
         root_span = span_manager.start_session_span("root", {})
         root_trace_id = root_span.get_span_context().trace_id
 
         # Child session (agent spawn)
-        child_span = span_manager.start_session_span(
-            "child", {}, parent_session_id="root"
-        )
+        child_span = span_manager.start_session_span("child", {}, parent_session_id="root")
 
         # Grandchild session (nested agent spawn)
         grandchild_span = span_manager.start_session_span(

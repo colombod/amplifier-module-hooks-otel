@@ -517,9 +517,7 @@ class OTelHook:
         if child_session_id and parent_session_id:
             # Record the relationship - session:start will use this to link traces
             self._fork_parent_map[child_session_id] = parent_session_id
-            logger.debug(
-                f"Recorded fork: child={child_session_id} parent={parent_session_id}"
-            )
+            logger.debug(f"Recorded fork: child={child_session_id} parent={parent_session_id}")
 
         return HookResult(action="continue")
 
