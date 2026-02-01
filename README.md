@@ -40,35 +40,216 @@ Hook modules require **two steps** to integrate with Amplifier:
 1. **Install** - Makes the Python code available
 2. **Configure** - Tells Amplifier to mount the hook and receive events
 
-### How It Works
+### How It Works: Complete Integration with amplifier-app-cli
+
+When you run `amplifier run "prompt"`, here's **exactly** what happens to load and activate this hook module:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ 1. INSTALL: uv add amplifier-module-hooks-otel                  │
-│    └── Registers entry point: amplifier.modules → hooks-otel    │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 2. CONFIGURE: Add to bundle/behavior/settings                   │
-│    hooks:                                                       │
-│      - module: hooks-otel                                       │
-│        config: {...}                                            │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 3. KERNEL MOUNTS: During session initialization                 │
-│    └── Calls mount(coordinator, config)                         │
-│    └── Hook registers handlers via coordinator.hooks.register() │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 4. EVENTS FLOW: Kernel emits → Hook handlers called             │
-│    session:start, llm:request, tool:pre, tool:post, etc.        │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         USER: amplifier run "hello"                          │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ STEP 1: CLI RESOLVES CONFIGURATION                                           │
+│ Component: amplifier-app-cli                                                 │
+│                                                                              │
+│ What happens:                                                                │
+│   • CLI reads active bundle (from `amplifier bundle use` or --bundle flag)   │
+│   • Loads bundle YAML including all `includes:` (behaviors, nested bundles)  │
+│   • Merges settings.yaml overrides (environment-specific config)             │
+│   • Produces a "mount_plan" containing: providers, tools, hooks, context     │
+│                                                                              │
+│ Why needed:                                                                  │
+│   The CLI is the POLICY layer - it decides WHICH bundle/config to use.       │
+│   The kernel doesn't know about bundles; it only sees the final mount_plan.  │
+│                                                                              │
+│ Code path: run.py:157 → config.py:109 → bundle.py:200                        │
+│                                                                              │
+│ Result: mount_plan = {                                                       │
+│   "hooks": [{"module": "hooks-otel", "config": {...}}],                      │
+│   "providers": [...], "tools": [...], ...                                    │
+│ }                                                                            │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ STEP 2: FOUNDATION PREPARES THE SESSION                                      │
+│ Component: amplifier-foundation                                              │
+│                                                                              │
+│ What happens:                                                                │
+│   • Foundation's `load_and_prepare_bundle()` activates all modules           │
+│   • For each module in hooks/providers/tools:                                │
+│     - If `source:` is git URL → clone repo, install package                  │
+│     - If already installed → use existing package                            │
+│   • Creates a `BundleModuleResolver` that maps module IDs to paths           │
+│   • Creates `PreparedBundle` with mount_plan + resolver                      │
+│                                                                              │
+│ Why needed:                                                                  │
+│   Foundation handles MODULE ACTIVATION - downloading, installing, and        │
+│   creating the mapping so the kernel can find "hooks-otel" → actual code.    │
+│   This separation allows bundles to reference modules by name, not path.     │
+│                                                                              │
+│ Code path: bundle.py:323 (activate_all) → bundle.py:722 (resolver)           │
+│                                                                              │
+│ Result: resolver = {"hooks-otel": Path("/home/user/.amplifier/cache/...")}   │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ STEP 3: KERNEL SESSION IS CREATED                                            │
+│ Component: amplifier-core (kernel)                                           │
+│                                                                              │
+│ What happens:                                                                │
+│   • `PreparedBundle.create_session()` creates an `AmplifierSession`          │
+│   • The resolver is mounted: coordinator.mount("module-source-resolver", r)  │
+│   • `session.initialize()` is called to load all modules                     │
+│                                                                              │
+│ Why needed:                                                                  │
+│   The kernel provides the SESSION LIFECYCLE - it's the container that holds  │
+│   all modules together. The resolver must be mounted BEFORE initialization   │
+│   so the kernel can find modules during the loading loop.                    │
+│                                                                              │
+│ Code path: bundle.py:1023 → bundle.py:1033 → bundle.py:1053                  │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ STEP 4: KERNEL LOADS HOOK MODULES                                            │
+│ Component: amplifier-core (kernel)                                           │
+│                                                                              │
+│ What happens:                                                                │
+│   • Kernel iterates: for hook_config in mount_plan["hooks"]:                 │
+│   • For each hook (e.g., "hooks-otel"):                                      │
+│     1. loader.load("hooks-otel", config, source_hint)                        │
+│     2. Resolver maps "hooks-otel" → installed package path                   │
+│     3. Loader finds entry point: amplifier.modules → hooks-otel              │
+│     4. Entry point resolves to: amplifier_module_hooks_otel:mount            │
+│                                                                              │
+│ Why needed:                                                                  │
+│   The kernel provides the MODULE LOADING MECHANISM. It uses Python's         │
+│   entry_points system to discover the mount() function. This decouples       │
+│   the module name from its implementation - you can swap implementations     │
+│   without changing bundle configuration.                                     │
+│                                                                              │
+│ Code path: session.py:250-269 → loader.py:228 → loader.py:266                │
+│                                                                              │
+│ Entry point lookup:                                                          │
+│   [project.entry-points."amplifier.modules"]                                 │
+│   hooks-otel = "amplifier_module_hooks_otel:mount"                           │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ STEP 5: HOOK MODULE'S mount() IS CALLED                                      │
+│ Component: amplifier-module-hooks-otel (this module)                         │
+│                                                                              │
+│ What happens:                                                                │
+│   • Kernel calls: await mount(coordinator, config)                           │
+│   • Hook reads config (exporter, endpoint, service_name, etc.)               │
+│   • Hook creates OTelHook instance with configured exporters                 │
+│   • Hook registers handlers for each event it wants to observe               │
+│                                                                              │
+│ Why needed:                                                                  │
+│   The hook module provides the BEHAVIOR. It decides what to do when events   │
+│   occur. The mount() function is the hook's opportunity to set up and        │
+│   register for the events it cares about.                                    │
+│                                                                              │
+│ Code path: __init__.py:1049 (mount function)                                 │
+│                                                                              │
+│ Code example:                                                                │
+│   async def mount(coordinator, config):                                      │
+│       hook = OTelHook(OTelConfig.from_dict(config))                          │
+│       coordinator.hooks.register("session:start", hook.on_session_start)     │
+│       coordinator.hooks.register("llm:request", hook.on_llm_request)         │
+│       # ... register for all 26 kernel events                                │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ STEP 6: HOOK REGISTERS EVENT HANDLERS                                        │
+│ Component: amplifier-core (HookRegistry)                                     │
+│                                                                              │
+│ What happens:                                                                │
+│   • coordinator.hooks.register(event, handler, priority, name)               │
+│   • HookRegistry stores handler in _handlers[event] list                     │
+│   • Handlers are sorted by priority (lower = called earlier)                 │
+│   • Returns unregister function for cleanup                                  │
+│                                                                              │
+│ Why needed:                                                                  │
+│   The kernel's HookRegistry is the EVENT DISPATCH MECHANISM. It maintains    │
+│   a mapping of event → handlers and ensures handlers are called in priority  │
+│   order. Multiple hooks can register for the same event.                     │
+│                                                                              │
+│ Code path: hooks.py:54-86                                                    │
+│                                                                              │
+│ Registry state after mount:                                                  │
+│   _handlers = {                                                              │
+│     "session:start": [HookHandler(on_session_start, priority=5)],            │
+│     "llm:request": [HookHandler(on_llm_request, priority=5)],                │
+│     "tool:pre": [HookHandler(on_tool_pre, priority=5)],                      │
+│     ...                                                                      │
+│   }                                                                          │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ STEP 7: EVENTS FLOW DURING EXECUTION                                         │
+│ Component: amplifier-core (orchestrator emits) → hooks-otel (receives)       │
+│                                                                              │
+│ What happens:                                                                │
+│   • Orchestrator runs the agent loop (LLM → tools → response)                │
+│   • At each lifecycle point, kernel emits events:                            │
+│     - await hooks.emit("session:start", {session_id, ...})                   │
+│     - await hooks.emit("llm:request", {model, messages, ...})                │
+│     - await hooks.emit("tool:pre", {tool_name, arguments, ...})              │
+│   • HookRegistry calls all registered handlers for each event                │
+│   • hooks-otel handlers create OTel spans and record metrics                 │
+│                                                                              │
+│ Why needed:                                                                  │
+│   This is the RUNTIME OBSERVATION. The kernel emits events as a MECHANISM;   │
+│   the hook decides POLICY (what to record, where to send). Multiple hooks    │
+│   can observe the same events without interfering with each other.           │
+│                                                                              │
+│ Event flow example:                                                          │
+│   1. User sends prompt                                                       │
+│   2. Kernel emits "session:start" → hooks-otel creates root span             │
+│   3. Orchestrator calls LLM                                                  │
+│   4. Kernel emits "llm:request" → hooks-otel creates GenAI span              │
+│   5. LLM responds with tool call                                             │
+│   6. Kernel emits "tool:pre" → hooks-otel creates tool span                  │
+│   7. Tool executes                                                           │
+│   8. Kernel emits "tool:post" → hooks-otel ends tool span with result        │
+│   9. ... continues until session ends ...                                    │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Component Responsibilities Summary
+
+| Component | Layer | Responsibility | Why Separated |
+|-----------|-------|----------------|---------------|
+| **amplifier-app-cli** | Application | Config resolution, bundle selection, user interaction | Policy decisions (which bundle, which settings) |
+| **amplifier-foundation** | Library | Bundle composition, module activation, session creation helpers | Convenience layer (downloading, caching, resolving) |
+| **amplifier-core** | Kernel | Module loading loop, event emission, hook registry | Mechanism layer (how to load, how to dispatch) |
+| **hooks-otel** | Module | Event handlers, OTel span/metric creation | Behavior layer (what to do with events) |
+
+### Why This Architecture?
+
+**Separation of Concerns:**
+- CLI doesn't know about OTel
+- Kernel doesn't know about bundles
+- Hook doesn't know about config resolution
+- Each layer has a single responsibility
+
+**Pluggability:**
+- Swap hooks without changing CLI or kernel
+- Swap exporters without changing hook registration
+- Swap bundles without changing module implementations
+
+**Testability:**
+- Test hook in isolation with mock coordinator
+- Test CLI with mock bundles
+- Test kernel with mock modules
 
 ### Step 1: Install the Package
 
