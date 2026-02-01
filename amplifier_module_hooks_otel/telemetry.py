@@ -22,17 +22,22 @@ Usage in applications:
 
 Privacy:
     Local paths are automatically sanitized to "local" to protect privacy.
-    Git URLs (git+https://, https://) are preserved as they are public.
+    Git URLs (git+https://, https://, git@, ssh://) are preserved as they are public.
 
 Graceful Degradation:
     If OpenTelemetry is not initialized (hook not mounted), these functions
     are safe to call - they simply no-op.
+
+Thread Safety:
+    _register() and _unregister() should only be called once during module
+    mount/unmount. Concurrent calls are not supported. Once initialized,
+    the module-level variables are only read, not written.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .attributes import sanitize_bundle_source
 
@@ -53,6 +58,9 @@ def _register(metrics_recorder: MetricsRecorder, span_manager: SpanManager) -> N
 
     This is an internal function called by the hook module when it initializes.
     Applications should not call this directly.
+
+    Thread Safety: This function should only be called once during module mount.
+    Concurrent calls are not supported.
 
     Args:
         metrics_recorder: The MetricsRecorder instance from the hook.
@@ -87,6 +95,40 @@ def is_initialized() -> bool:
     return _initialized
 
 
+def _emit_bundle_span(
+    operation: str,
+    name: str,
+    version: str | None,
+    source: str | None,
+    extra_attrs: dict[str, Any] | None = None,
+) -> None:
+    """Emit a span for a bundle operation.
+
+    Args:
+        operation: Operation name (add, activate, load).
+        name: Bundle name.
+        version: Bundle version (optional).
+        source: Sanitized bundle source (optional).
+        extra_attrs: Additional span attributes.
+    """
+    if _span_manager is None:
+        return
+
+    attributes: dict[str, Any] = {
+        "amplifier.bundle.name": name,
+        "amplifier.bundle.operation": operation,
+    }
+    if version:
+        attributes["amplifier.bundle.version"] = version
+    if source and source != "unknown":
+        attributes["amplifier.bundle.source"] = source
+    if extra_attrs:
+        attributes.update(extra_attrs)
+
+    span = _span_manager.create_standalone_span(f"bundle.{operation}", attributes)
+    span.end()
+
+
 def bundle_added(
     name: str,
     source: str | None = None,
@@ -113,8 +155,8 @@ def bundle_added(
         logger.debug(f"Telemetry not initialized, skipping bundle_added for '{name}'")
         return
 
-    # Sanitize source for privacy
-    sanitized_source = sanitize_bundle_source(source) if source else None
+    # Sanitize source for privacy (handles None -> "unknown")
+    sanitized_source = sanitize_bundle_source(source)
 
     # Record metric
     _metrics_recorder.record_bundle_used(
@@ -123,18 +165,8 @@ def bundle_added(
         bundle_source=sanitized_source,
     )
 
-    # Create a span for the operation
-    if _span_manager is not None:
-        span = _span_manager._tracer.start_span(
-            "bundle.add",
-            attributes={
-                "amplifier.bundle.name": name,
-                "amplifier.bundle.operation": "add",
-                **({"amplifier.bundle.version": version} if version else {}),
-                **({"amplifier.bundle.source": sanitized_source} if sanitized_source else {}),
-            },
-        )
-        span.end()
+    # Emit span
+    _emit_bundle_span("add", name, version, sanitized_source)
 
     logger.debug(f"Recorded bundle_added: {name}")
 
@@ -164,8 +196,8 @@ def bundle_activated(
         logger.debug(f"Telemetry not initialized, skipping bundle_activated for '{name}'")
         return
 
-    # Sanitize source for privacy
-    sanitized_source = sanitize_bundle_source(source) if source else None
+    # Sanitize source for privacy (handles None -> "unknown")
+    sanitized_source = sanitize_bundle_source(source)
 
     # Record metric
     _metrics_recorder.record_bundle_used(
@@ -174,18 +206,8 @@ def bundle_activated(
         bundle_source=sanitized_source,
     )
 
-    # Create a span for the operation
-    if _span_manager is not None:
-        span = _span_manager._tracer.start_span(
-            "bundle.activate",
-            attributes={
-                "amplifier.bundle.name": name,
-                "amplifier.bundle.operation": "activate",
-                **({"amplifier.bundle.version": version} if version else {}),
-                **({"amplifier.bundle.source": sanitized_source} if sanitized_source else {}),
-            },
-        )
-        span.end()
+    # Emit span
+    _emit_bundle_span("activate", name, version, sanitized_source)
 
     logger.debug(f"Recorded bundle_activated: {name}")
 
@@ -218,8 +240,8 @@ def bundle_loaded(
         logger.debug(f"Telemetry not initialized, skipping bundle_loaded for '{name}'")
         return
 
-    # Sanitize source for privacy
-    sanitized_source = sanitize_bundle_source(source) if source else None
+    # Sanitize source for privacy (handles None -> "unknown")
+    sanitized_source = sanitize_bundle_source(source)
 
     # Record metric
     _metrics_recorder.record_bundle_used(
@@ -228,18 +250,13 @@ def bundle_loaded(
         bundle_source=sanitized_source,
     )
 
-    # Create a span for the operation
-    if _span_manager is not None:
-        span = _span_manager._tracer.start_span(
-            "bundle.load",
-            attributes={
-                "amplifier.bundle.name": name,
-                "amplifier.bundle.operation": "load",
-                "amplifier.bundle.cached": cached,
-                **({"amplifier.bundle.version": version} if version else {}),
-                **({"amplifier.bundle.source": sanitized_source} if sanitized_source else {}),
-            },
-        )
-        span.end()
+    # Emit span with cached attribute
+    _emit_bundle_span(
+        "load",
+        name,
+        version,
+        sanitized_source,
+        extra_attrs={"amplifier.bundle.cached": cached},
+    )
 
     logger.debug(f"Recorded bundle_loaded: {name} (cached={cached})")

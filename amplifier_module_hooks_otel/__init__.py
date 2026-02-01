@@ -121,6 +121,7 @@ __all__ = [
     "MetricsRecorder",
     "AttributeMapper",
     "mount",
+    "unmount",
     "TRACED_EVENTS",
     "telemetry",
 ]
@@ -1124,3 +1125,22 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
         f"Mounted hooks-otel (exporter={otel_config.exporter}, "
         f"traces={otel_config.traces_enabled}, metrics={otel_config.metrics_enabled})"
     )
+
+
+async def unmount(coordinator: ModuleCoordinator) -> None:
+    """Unmount the OpenTelemetry hook module.
+
+    Cleans up:
+    - Unregisters all event handlers from coordinator
+    - Clears telemetry API registration
+
+    Args:
+        coordinator: ModuleCoordinator to unregister hooks from.
+    """
+    # Unregister all hooks-otel handlers
+    coordinator.hooks.unregister_by_name("hooks-otel")
+
+    # Clean up telemetry API
+    telemetry._unregister()
+
+    logger.info("Unmounted hooks-otel")

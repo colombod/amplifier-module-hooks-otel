@@ -9,6 +9,14 @@ def sanitize_bundle_source(source_uri: str | None) -> str:
     For git-based bundles (public), return the full URI.
     For local/disk bundles (private), return "local" to protect privacy.
 
+    Recognized public patterns:
+    - git+https://... (explicit git over HTTPS)
+    - git+http://...  (explicit git over HTTP, for dev/testing)
+    - https://...     (HTTPS URLs)
+    - http://...      (HTTP URLs, for dev/testing)
+    - git@host:...    (SSH Git URLs)
+    - ssh://...       (SSH URLs)
+
     Args:
         source_uri: The bundle source URI or path.
 
@@ -20,6 +28,10 @@ def sanitize_bundle_source(source_uri: str | None) -> str:
         'git+https://github.com/org/bundle'
         >>> sanitize_bundle_source("https://github.com/org/bundle")
         'https://github.com/org/bundle'
+        >>> sanitize_bundle_source("git@github.com:org/bundle.git")
+        'git@github.com:org/bundle.git'
+        >>> sanitize_bundle_source("ssh://git@github.com/org/bundle")
+        'ssh://git@github.com/org/bundle'
         >>> sanitize_bundle_source("/home/user/my-bundle")
         'local'
         >>> sanitize_bundle_source("./my-bundle")
@@ -27,11 +39,21 @@ def sanitize_bundle_source(source_uri: str | None) -> str:
         >>> sanitize_bundle_source(None)
         'unknown'
     """
-    if source_uri is None:
+    if source_uri is None or source_uri == "":
         return "unknown"
 
     # Git URLs are public - safe to track
+    # HTTP/HTTPS protocols (including git+http/git+https)
+    # Note: HTTP preserved intentionally for dev environments, local registries, CI/CD
     if source_uri.startswith(("git+https://", "git+http://", "https://", "http://")):
+        return source_uri
+
+    # SSH Git URLs (git@github.com:org/repo.git format)
+    if source_uri.startswith("git@") and ":" in source_uri:
+        return source_uri
+
+    # SSH protocol URLs (ssh://git@github.com/org/repo.git)
+    if source_uri.startswith("ssh://"):
         return source_uri
 
     # Everything else is considered local/private

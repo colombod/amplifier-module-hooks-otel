@@ -225,6 +225,30 @@ class TestSanitizeBundleSource:
         source = "file:///home/user/bundle"
         assert sanitize_bundle_source(source) == "local"
 
+    def test_ssh_git_url_preserved(self):
+        """SSH Git URLs (git@host:path) are preserved (public)."""
+        source = "git@github.com:microsoft/amplifier.git"
+        assert sanitize_bundle_source(source) == source
+
+    def test_ssh_git_url_without_git_extension_preserved(self):
+        """SSH Git URLs without .git extension are preserved."""
+        source = "git@github.com:org/repo"
+        assert sanitize_bundle_source(source) == source
+
+    def test_ssh_protocol_url_preserved(self):
+        """SSH protocol URLs (ssh://) are preserved (public)."""
+        source = "ssh://git@github.com/microsoft/amplifier"
+        assert sanitize_bundle_source(source) == source
+
+    def test_empty_string_returns_unknown(self):
+        """Empty string returns 'unknown'."""
+        assert sanitize_bundle_source("") == "unknown"
+
+    def test_git_at_without_colon_sanitized(self):
+        """git@ without colon is not a valid SSH URL, sanitize to local."""
+        source = "git@nocolon"
+        assert sanitize_bundle_source(source) == "local"
+
 
 class TestAttributeMapperForBundle:
     """Tests for bundle attribute mapping."""
