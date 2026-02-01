@@ -199,8 +199,7 @@ class OTelHook:
         Returns:
             HookResult with action="continue".
         """
-        # Check global opt-out first, then feature-specific flag
-        if not self.config.enabled or not self.config.traces_enabled:
+        if not self.config.enabled:
             return HookResult(action="continue")
 
         session_id = data.get("session_id")
@@ -210,17 +209,26 @@ class OTelHook:
         # Check if this session was forked from a parent (recorded in session:fork)
         parent_session_id = self._fork_parent_map.pop(session_id, None)
 
-        attrs = AttributeMapper.for_session(data)
-        if parent_session_id:
-            attrs["amplifier.session.parent_id"] = parent_session_id
+        # Record metrics (session started)
+        if self._metrics_recorder:
+            self._metrics_recorder.record_session_started(
+                session_id=session_id,
+                user_id=data.get("user_id", ""),
+                is_fork=parent_session_id is not None,
+                is_resume=False,
+            )
 
-        # Create session span, linking to parent if this is a forked session
-        self._span_manager.start_session_span(session_id, attrs, parent_session_id)  # type: ignore[union-attr]
+        # Create trace span if traces enabled
+        if self.config.traces_enabled and self._span_manager:
+            attrs = AttributeMapper.for_session(data)
+            if parent_session_id:
+                attrs["amplifier.session.parent_id"] = parent_session_id
+            self._span_manager.start_session_span(session_id, attrs, parent_session_id)
 
         return HookResult(action="continue")
 
     async def on_session_end(self, event: str, data: dict[str, Any]) -> HookResult:
-        """Handle session:end - end root span.
+        """Handle session:end - end root span and record session duration.
 
         Args:
             event: Event name.
@@ -229,12 +237,21 @@ class OTelHook:
         Returns:
             HookResult with action="continue".
         """
-        if not self.config.enabled or not self.config.traces_enabled:
+        if not self.config.enabled:
             return HookResult(action="continue")
 
         session_id = data.get("session_id")
-        if session_id:
-            self._span_manager.end_session_span(session_id)  # type: ignore[union-attr]
+        if not session_id:
+            return HookResult(action="continue")
+
+        # Record session duration metric
+        if self._metrics_recorder:
+            status = data.get("status", "completed")
+            self._metrics_recorder.record_session_ended(session_id, status)
+
+        # End trace span
+        if self.config.traces_enabled and self._span_manager:
+            self._span_manager.end_session_span(session_id)
 
         return HookResult(action="continue")
 
@@ -258,7 +275,7 @@ class OTelHook:
         return HookResult(action="continue")
 
     async def on_execution_end(self, event: str, data: dict[str, Any]) -> HookResult:
-        """Handle execution:end - end turn span.
+        """Handle execution:end - end turn span and record turn completion.
 
         Args:
             event: Event name.
@@ -267,12 +284,27 @@ class OTelHook:
         Returns:
             HookResult with action="continue".
         """
-        if not self.config.enabled or not self.config.traces_enabled:
+        if not self.config.enabled:
             return HookResult(action="continue")
 
         session_id = data.get("session_id")
-        if session_id:
-            self._span_manager.end_turn_span(session_id)  # type: ignore[union-attr]
+        if not session_id:
+            return HookResult(action="continue")
+
+        # Get turn number from span manager before ending turn
+        turn_number = 0
+        if self._span_manager:
+            ctx = self._span_manager._sessions.get(session_id)
+            if ctx:
+                turn_number = ctx.turn_count
+
+        # Record turn completed metric
+        if self._metrics_recorder:
+            self._metrics_recorder.record_turn_completed(session_id, turn_number)
+
+        # End trace span
+        if self.config.traces_enabled and self._span_manager:
+            self._span_manager.end_turn_span(session_id)
 
         return HookResult(action="continue")
 
@@ -349,13 +381,19 @@ class OTelHook:
         if self._metrics_recorder:
             usage = data.get("usage", {})
             metric_attrs = AttributeMapper.for_llm_request(data)
+            provider = data.get("provider", "unknown")
+            model = data.get("model", "unknown")
 
+            # GenAI convention metrics
             self._metrics_recorder.record_duration(correlation_key, metric_attrs)
             self._metrics_recorder.record_token_usage(
                 usage.get("input_tokens"),
                 usage.get("output_tokens"),
                 metric_attrs,
             )
+
+            # Amplifier-specific metrics
+            self._metrics_recorder.record_llm_call(provider, model, success=True)
 
         return HookResult(action="continue")
 
@@ -418,7 +456,10 @@ class OTelHook:
 
             if self._metrics_recorder:
                 attrs = AttributeMapper.for_tool(data)
-                self._metrics_recorder.record_duration(correlation_key, attrs)
+                duration = self._metrics_recorder.record_duration(correlation_key, attrs)
+                tool_name = data.get("tool_name", "unknown")
+                # Record Amplifier-specific tool metrics
+                self._metrics_recorder.record_tool_call(tool_name, duration, success=True)
 
         return HookResult(action="continue")
 
@@ -456,7 +497,10 @@ class OTelHook:
 
             if self._metrics_recorder:
                 attrs = AttributeMapper.for_tool(data)
-                self._metrics_recorder.record_duration(correlation_key, attrs)
+                duration = self._metrics_recorder.record_duration(correlation_key, attrs)
+                tool_name = data.get("tool_name", "unknown")
+                # Record Amplifier-specific tool metrics with failure
+                self._metrics_recorder.record_tool_call(tool_name, duration, success=False)
 
         return HookResult(action="continue")
 
@@ -485,6 +529,12 @@ class OTelHook:
                 else "Provider error"
             )
             self._span_manager.end_child_span(correlation_key, StatusCode.ERROR, error_msg)  # type: ignore[union-attr]
+
+            # Record failed LLM call metric
+            if self._metrics_recorder:
+                provider = data.get("provider", "unknown")
+                model = data.get("model", "unknown")
+                self._metrics_recorder.record_llm_call(provider, model, success=False)
 
         return HookResult(action="continue")
 

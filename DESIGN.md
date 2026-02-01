@@ -140,20 +140,46 @@ amplifier.session (root, SpanKind.SERVER)
 
 ## Metrics
 
-Following [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/):
+The module emits two categories of metrics for comprehensive observability.
+
+### GenAI Semantic Convention Metrics
+
+Following [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) for APM tool compatibility:
 
 | Metric | Type | Unit | Description |
 |--------|------|------|-------------|
-| `gen_ai.client.token.usage` | Histogram | tokens | Input/output token counts per LLM call |
-| `gen_ai.client.operation.duration` | Histogram | seconds | Duration of LLM and tool operations |
+| `gen_ai.client.token.usage` | Histogram | `{token}` | Input/output token counts per LLM call |
+| `gen_ai.client.operation.duration` | Histogram | `s` | Duration of LLM and tool operations |
 
-### Metric Attributes
-
-All metrics include:
+**GenAI Metric Attributes:**
 - `gen_ai.system` - Provider name (e.g., "anthropic", "openai")
 - `gen_ai.request.model` - Model name
 - `gen_ai.operation.name` - Operation type ("chat", "execute_tool")
 - `gen_ai.token.type` - "input" or "output" (for token usage)
+
+### Amplifier-Specific Metrics
+
+Detailed metrics for Amplifier-specific observability:
+
+| Metric | Type | Unit | Description |
+|--------|------|------|-------------|
+| `amplifier.tool.duration` | Histogram | `s` | Tool execution duration |
+| `amplifier.session.duration` | Histogram | `s` | Total session duration |
+| `amplifier.tool.calls` | Counter | `{call}` | Number of tool invocations |
+| `amplifier.llm.calls` | Counter | `{call}` | Number of LLM calls |
+| `amplifier.sessions.started` | Counter | `{session}` | Number of sessions started |
+| `amplifier.turns.completed` | Counter | `{turn}` | Number of turns completed |
+
+**Amplifier Metric Attributes:**
+
+| Metric | Attributes |
+|--------|------------|
+| `amplifier.tool.duration` | `amplifier.tool.name`, `amplifier.tool.success` |
+| `amplifier.tool.calls` | `amplifier.tool.name`, `amplifier.tool.success` |
+| `amplifier.llm.calls` | `gen_ai.system`, `gen_ai.request.model`, `amplifier.llm.success` |
+| `amplifier.sessions.started` | `amplifier.session.type` (new/fork/resume), `amplifier.user.id` |
+| `amplifier.session.duration` | `amplifier.session.status` (completed/cancelled/error) |
+| `amplifier.turns.completed` | `amplifier.turn.number` |
 
 ## Configuration
 
