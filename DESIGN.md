@@ -140,12 +140,20 @@ amplifier.session (root, SpanKind.SERVER)
 
 ## Metrics
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `gen_ai.client.token.usage` | Counter | Token consumption by model/provider |
-| `gen_ai.client.operation.duration` | Histogram | LLM call latency |
-| `amplifier.tool.duration` | Histogram | Tool execution time |
-| `amplifier.session.duration` | Histogram | Session duration |
+Following [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/):
+
+| Metric | Type | Unit | Description |
+|--------|------|------|-------------|
+| `gen_ai.client.token.usage` | Histogram | tokens | Input/output token counts per LLM call |
+| `gen_ai.client.operation.duration` | Histogram | seconds | Duration of LLM and tool operations |
+
+### Metric Attributes
+
+All metrics include:
+- `gen_ai.system` - Provider name (e.g., "anthropic", "openai")
+- `gen_ai.request.model` - Model name
+- `gen_ai.operation.name` - Operation type ("chat", "execute_tool")
+- `gen_ai.token.type` - "input" or "output" (for token usage)
 
 ## Configuration
 
