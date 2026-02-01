@@ -17,14 +17,14 @@ def hook():
 @pytest.fixture
 def hook_no_metrics():
     """Create an OTelHook with metrics disabled."""
-    config = OTelConfig(metrics_enabled=False)
+    config = OTelConfig.from_dict({"capture": {"traces": True, "metrics": False}})
     return OTelHook(config)
 
 
 @pytest.fixture
 def hook_no_traces():
     """Create an OTelHook with traces disabled."""
-    config = OTelConfig(traces_enabled=False)
+    config = OTelConfig.from_dict({"capture": {"traces": False, "metrics": True}})
     return OTelHook(config)
 
 
@@ -39,7 +39,7 @@ class TestOTelHookSessionLifecycle:
         result = await hook.on_session_start("session:start", data)
 
         assert result.action == "continue"
-        assert "test-session-123" in hook._span_manager._session_spans
+        assert hook._span_manager.get_session_span("test-session-123") is not None
 
     @pytest.mark.asyncio
     async def test_session_end_closes_span(self, hook, span_exporter):
@@ -50,7 +50,7 @@ class TestOTelHookSessionLifecycle:
         result = await hook.on_session_end("session:end", data)
 
         assert result.action == "continue"
-        assert "test-session-123" not in hook._span_manager._session_spans
+        assert hook._span_manager.get_session_span("test-session-123") is None
 
         # Verify span was exported
         spans = span_exporter.get_finished_spans()
@@ -65,7 +65,7 @@ class TestOTelHookSessionLifecycle:
         result = await hook.on_session_start("session:start", data)
 
         assert result.action == "continue"
-        assert len(hook._span_manager._session_spans) == 0
+        assert len(hook._span_manager._sessions) == 0
 
 
 class TestOTelHookTurnLifecycle:
@@ -80,7 +80,9 @@ class TestOTelHookTurnLifecycle:
         result = await hook.on_execution_start("execution:start", session_data)
 
         assert result.action == "continue"
-        assert "test-session-123" in hook._span_manager._turn_spans
+        ctx = hook._span_manager._sessions.get("test-session-123")
+        assert ctx is not None
+        assert ctx.current_turn is not None
 
     @pytest.mark.asyncio
     async def test_execution_end_closes_turn_span(self, hook, span_exporter):
@@ -92,7 +94,9 @@ class TestOTelHookTurnLifecycle:
         result = await hook.on_execution_end("execution:end", session_data)
 
         assert result.action == "continue"
-        assert "test-session-123" not in hook._span_manager._turn_spans
+        ctx = hook._span_manager._sessions.get("test-session-123")
+        assert ctx is not None
+        assert ctx.current_turn is None
 
 
 class TestOTelHookLlmOperations:
@@ -243,7 +247,7 @@ class TestOTelHookDisabledFeatures:
 
         await hook_no_traces.on_session_start("session:start", data)
 
-        assert len(hook_no_traces._span_manager._session_spans) == 0
+        assert len(hook_no_traces._span_manager._sessions) == 0
 
     @pytest.mark.asyncio
     async def test_metrics_disabled_skips_metrics(self, hook_no_metrics):
@@ -388,15 +392,21 @@ class TestOTelConfig:
     def test_is_active_property(self):
         """is_active returns True only when enabled AND features active."""
         # Fully enabled
-        config = OTelConfig(enabled=True, traces_enabled=True, metrics_enabled=True)
+        config = OTelConfig.from_dict(
+            {"enabled": True, "capture": {"traces": True, "metrics": True}}
+        )
         assert config.is_active is True
 
         # Disabled globally
-        config = OTelConfig(enabled=False, traces_enabled=True, metrics_enabled=True)
+        config = OTelConfig.from_dict(
+            {"enabled": False, "capture": {"traces": True, "metrics": True}}
+        )
         assert config.is_active is False
 
         # Enabled but no features
-        config = OTelConfig(enabled=True, traces_enabled=False, metrics_enabled=False)
+        config = OTelConfig.from_dict(
+            {"enabled": True, "capture": {"traces": False, "metrics": False}}
+        )
         assert config.is_active is False
 
 
