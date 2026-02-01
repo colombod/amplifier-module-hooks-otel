@@ -55,6 +55,25 @@ class SpanManager:
         self._sessions: dict[str, SessionSpanContext] = {}
         self._active_spans: dict[str, Span] = {}  # correlation_key → span
 
+    def create_standalone_span(
+        self,
+        name: str,
+        attributes: dict[str, Any] | None = None,
+    ) -> Span:
+        """Create a standalone span not attached to any session.
+
+        Use for one-off events like bundle operations that don't occur
+        within a session context.
+
+        Args:
+            name: Span name (e.g., "bundle.add").
+            attributes: Optional span attributes.
+
+        Returns:
+            The created span. Caller is responsible for calling span.end().
+        """
+        return self._tracer.start_span(name, attributes=attributes or {})
+
     def _get_context(self, session_id: str) -> SessionSpanContext:
         """Get or create span context for session."""
         if session_id not in self._sessions:

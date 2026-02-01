@@ -62,6 +62,7 @@ from opentelemetry import metrics as otel_metrics
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, StatusCode
 
+from . import telemetry
 from .attributes import AttributeMapper
 from .config import CaptureConfig, OTelConfig
 from .metrics import MetricsRecorder
@@ -120,7 +121,9 @@ __all__ = [
     "MetricsRecorder",
     "AttributeMapper",
     "mount",
+    "unmount",
     "TRACED_EVENTS",
+    "telemetry",
 ]
 
 
@@ -168,6 +171,10 @@ class OTelHook:
 
         self._span_manager = SpanManager(self._tracer)
         self._metrics_recorder = MetricsRecorder(self._meter) if config.metrics_enabled else None
+
+        # Register telemetry API for application use
+        if self._metrics_recorder is not None:
+            telemetry._register(self._metrics_recorder, self._span_manager)
 
         # Internal correlation tracking - avoids mutating event data
         # Maps (session_id, event_type) → correlation_key for pending operations
@@ -1118,3 +1125,22 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
         f"Mounted hooks-otel (exporter={otel_config.exporter}, "
         f"traces={otel_config.traces_enabled}, metrics={otel_config.metrics_enabled})"
     )
+
+
+async def unmount(coordinator: ModuleCoordinator) -> None:
+    """Unmount the OpenTelemetry hook module.
+
+    Cleans up:
+    - Unregisters all event handlers from coordinator
+    - Clears telemetry API registration
+
+    Args:
+        coordinator: ModuleCoordinator to unregister hooks from.
+    """
+    # Unregister all hooks-otel handlers
+    coordinator.hooks.unregister_by_name("hooks-otel")
+
+    # Clean up telemetry API
+    telemetry._unregister()
+
+    logger.info("Unmounted hooks-otel")

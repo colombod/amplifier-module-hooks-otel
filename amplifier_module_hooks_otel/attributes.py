@@ -3,6 +3,63 @@
 from typing import Any
 
 
+def sanitize_bundle_source(source_uri: str | None) -> str:
+    """Sanitize bundle source URI for privacy.
+
+    For git-based bundles (public), return the full URI.
+    For local/disk bundles (private), return "local" to protect privacy.
+
+    Recognized public patterns:
+    - git+https://... (explicit git over HTTPS)
+    - git+http://...  (explicit git over HTTP, for dev/testing)
+    - https://...     (HTTPS URLs)
+    - http://...      (HTTP URLs, for dev/testing)
+    - git@host:...    (SSH Git URLs)
+    - ssh://...       (SSH URLs)
+
+    Args:
+        source_uri: The bundle source URI or path.
+
+    Returns:
+        Sanitized source string safe for telemetry.
+
+    Examples:
+        >>> sanitize_bundle_source("git+https://github.com/org/bundle")
+        'git+https://github.com/org/bundle'
+        >>> sanitize_bundle_source("https://github.com/org/bundle")
+        'https://github.com/org/bundle'
+        >>> sanitize_bundle_source("git@github.com:org/bundle.git")
+        'git@github.com:org/bundle.git'
+        >>> sanitize_bundle_source("ssh://git@github.com/org/bundle")
+        'ssh://git@github.com/org/bundle'
+        >>> sanitize_bundle_source("/home/user/my-bundle")
+        'local'
+        >>> sanitize_bundle_source("./my-bundle")
+        'local'
+        >>> sanitize_bundle_source(None)
+        'unknown'
+    """
+    if source_uri is None or source_uri == "":
+        return "unknown"
+
+    # Git URLs are public - safe to track
+    # HTTP/HTTPS protocols (including git+http/git+https)
+    # Note: HTTP preserved intentionally for dev environments, local registries, CI/CD
+    if source_uri.startswith(("git+https://", "git+http://", "https://", "http://")):
+        return source_uri
+
+    # SSH Git URLs (git@github.com:org/repo.git format)
+    if source_uri.startswith("git@") and ":" in source_uri:
+        return source_uri
+
+    # SSH protocol URLs (ssh://git@github.com/org/repo.git)
+    if source_uri.startswith("ssh://"):
+        return source_uri
+
+    # Everything else is considered local/private
+    return "local"
+
+
 class AttributeMapper:
     """Map Amplifier kernel events to OTel GenAI semantic conventions.
 
@@ -24,6 +81,11 @@ class AttributeMapper:
     AMPLIFIER_SESSION_ID = "amplifier.session.id"
     AMPLIFIER_TURN_NUMBER = "amplifier.turn.number"
     AMPLIFIER_TOOL_NAME = "amplifier.tool.name"
+
+    # Bundle-related attributes
+    AMPLIFIER_BUNDLE_NAME = "amplifier.bundle.name"
+    AMPLIFIER_BUNDLE_VERSION = "amplifier.bundle.version"
+    AMPLIFIER_BUNDLE_SOURCE = "amplifier.bundle.source"
 
     @staticmethod
     def for_session(data: dict[str, Any]) -> dict[str, Any]:
@@ -320,6 +382,41 @@ class AttributeMapper:
             attrs["amplifier.artifact.type"] = artifact_type
         if size := data.get("size"):
             attrs["amplifier.artifact.size"] = size
+        return attrs
+
+    # ========== Bundle (Future: see github.com/microsoft/amplifier/issues/207) ==========
+
+    @staticmethod
+    def for_bundle(
+        bundle_name: str | None = None,
+        bundle_version: str | None = None,
+        bundle_source: str | None = None,
+    ) -> dict[str, Any]:
+        """Map bundle data to span attributes with privacy-aware source handling.
+
+        NOTE: Bundle lifecycle events do not yet exist in Amplifier's kernel.
+        See https://github.com/microsoft/amplifier/issues/207 for the proposal.
+
+        This method applies privacy-aware sanitization to bundle sources:
+        - Git URLs (git+https://, https://) are preserved (public)
+        - Local paths are replaced with "local" (privacy protection)
+
+        Args:
+            bundle_name: Name of the bundle.
+            bundle_version: Version of the bundle.
+            bundle_source: Source URI or path of the bundle.
+
+        Returns:
+            Dictionary of OTel attributes for bundle operations.
+        """
+        attrs: dict[str, Any] = {}
+        if bundle_name:
+            attrs[AttributeMapper.AMPLIFIER_BUNDLE_NAME] = bundle_name
+        if bundle_version:
+            attrs[AttributeMapper.AMPLIFIER_BUNDLE_VERSION] = bundle_version
+        if bundle_source is not None:
+            # Apply privacy-aware sanitization
+            attrs[AttributeMapper.AMPLIFIER_BUNDLE_SOURCE] = sanitize_bundle_source(bundle_source)
         return attrs
 
     # ========== Policy ==========
