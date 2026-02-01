@@ -33,20 +33,134 @@ This hook module integrates with Amplifier's hook system to emit OpenTelemetry s
 - **[UV](https://github.com/astral-sh/uv)** - Fast Python package manager
 - **Amplifier** installed and configured
 
-## Installation
+## Integration
+
+Hook modules require **two steps** to integrate with Amplifier:
+
+1. **Install** - Makes the Python code available
+2. **Configure** - Tells Amplifier to mount the hook and receive events
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 1. INSTALL: uv add amplifier-module-hooks-otel                  │
+│    └── Registers entry point: amplifier.modules → hooks-otel    │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 2. CONFIGURE: Add to bundle/behavior/settings                   │
+│    hooks:                                                       │
+│      - module: hooks-otel                                       │
+│        config: {...}                                            │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 3. KERNEL MOUNTS: During session initialization                 │
+│    └── Calls mount(coordinator, config)                         │
+│    └── Hook registers handlers via coordinator.hooks.register() │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 4. EVENTS FLOW: Kernel emits → Hook handlers called             │
+│    session:start, llm:request, tool:pre, tool:post, etc.        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Step 1: Install the Package
 
 ```bash
 # Install from GitHub
-uv pip install git+https://github.com/colombod/amplifier-module-hooks-otel
+uv add git+https://github.com/colombod/amplifier-module-hooks-otel
 
-# Or clone and install locally
+# Or for development
 git clone https://github.com/colombod/amplifier-module-hooks-otel
-uv pip install -e ./amplifier-module-hooks-otel
+uv add -e ./amplifier-module-hooks-otel
 ```
 
-## Configuration
+This registers the entry point in Python's package metadata:
+```toml
+# pyproject.toml (already configured)
+[project.entry-points."amplifier.modules"]
+hooks-otel = "amplifier_module_hooks_otel:mount"
+```
 
-Add to your Amplifier settings file (`~/.amplifier/settings.yaml`):
+### Step 2: Configure the Hook
+
+There are three ways to configure the hook:
+
+#### Option A: Bundle Behavior (Recommended)
+
+Create a reusable behavior for your bundle:
+
+```yaml
+# behaviors/otel.yaml
+bundle:
+  name: behavior-otel
+  version: 1.0.0
+  description: OpenTelemetry observability
+
+hooks:
+  - module: hooks-otel
+    config:
+      service_name: my-amplifier-app
+      exporter: otlp-http
+      endpoint: http://localhost:4318
+```
+
+Include in your bundle:
+```yaml
+# bundle.md frontmatter
+includes:
+  - bundle: foundation
+  - bundle: my-bundle:behaviors/otel
+```
+
+#### Option B: Direct in Bundle
+
+Add directly to your bundle's frontmatter:
+
+```yaml
+# bundle.md
+hooks:
+  - module: hooks-otel
+    config:
+      service_name: my-app
+      exporter: console
+```
+
+#### Option C: Settings File (Environment-Specific)
+
+For environment-specific configuration (overrides bundle defaults):
+
+```yaml
+# ~/.amplifier/settings.yaml
+hooks:
+  - module: hooks-otel
+    config:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+      headers:
+        Authorization: Bearer ${OTEL_AUTH_TOKEN}
+```
+
+#### Option D: Git Source (Auto-Install)
+
+Let Amplifier install the module automatically:
+
+```yaml
+hooks:
+  - module: hooks-otel
+    source: git+https://github.com/colombod/amplifier-module-hooks-otel@main
+    config:
+      service_name: my-app
+```
+
+## Configuration Reference
+
+Full configuration options:
 
 ```yaml
 hooks:
