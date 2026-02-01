@@ -306,9 +306,9 @@ Detailed metrics for Amplifier-specific observability:
 | `amplifier.turns.completed` | Counter | `{turn}` | Number of turns completed |
 | `amplifier.bundle.used` | Counter | `{bundle}` | Number of times a bundle is used |
 
-> **Bundle Tracking Note**: Bundle lifecycle events don't yet exist in Amplifier's kernel.
-> See [microsoft/amplifier#207](https://github.com/microsoft/amplifier/issues/207) for the proposal.
-> Local paths are sanitized to `"local"` for privacy; git URLs are preserved.
+> **Bundle Tracking**: Applications can emit bundle telemetry using the public API.
+> See [Application Integration](#application-integration) for usage.
+> Local paths are automatically sanitized to `"local"` for privacy; git URLs are preserved.
 
 **Amplifier Metric Attributes:**
 
@@ -358,6 +358,62 @@ uv run pyright
 # Linting and formatting
 uv run ruff check .
 uv run ruff format .
+```
+
+## Application Integration
+
+Applications (like `amplifier-app-cli`) can emit bundle telemetry by importing the public API:
+
+```python
+from amplifier_module_hooks_otel import telemetry
+
+# When a bundle is added (e.g., `amplifier bundle add`)
+telemetry.bundle_added(
+    name="my-bundle",
+    source="git+https://github.com/org/my-bundle",
+    version="1.0.0",
+)
+
+# When a bundle is activated (e.g., `amplifier bundle use`)
+telemetry.bundle_activated(
+    name="my-bundle",
+    source="git+https://github.com/org/my-bundle",
+)
+
+# When a bundle is loaded from cache/disk
+telemetry.bundle_loaded(
+    name="foundation",
+    source="git+https://github.com/microsoft/amplifier-foundation",
+    cached=True,
+)
+```
+
+### Privacy Protection
+
+Local paths are automatically sanitized:
+
+```python
+# Git URLs are preserved (public)
+telemetry.bundle_added(name="x", source="git+https://github.com/org/repo")
+# → source recorded as "git+https://github.com/org/repo"
+
+# Local paths become "local" (privacy)
+telemetry.bundle_added(name="x", source="/home/user/private-bundle")
+# → source recorded as "local"
+```
+
+### Graceful Degradation
+
+If the OTel hook is not mounted, these functions safely no-op:
+
+```python
+# Safe to call even if OTel is not configured
+telemetry.bundle_added(name="test")  # No-op, no error
+
+# Check if telemetry is active
+if telemetry.is_initialized():
+    # OTel is configured and ready
+    pass
 ```
 
 ## License

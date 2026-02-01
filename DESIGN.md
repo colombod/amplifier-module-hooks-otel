@@ -183,15 +183,24 @@ Detailed metrics for Amplifier-specific observability:
 | `amplifier.turns.completed` | `amplifier.turn.number` |
 | `amplifier.bundle.used` | `amplifier.bundle.name`, `amplifier.bundle.version`, `amplifier.bundle.source` |
 
-### Bundle Tracking Limitations
+### Bundle Tracking via Public API
 
-> **NOTE**: Bundle lifecycle events (`bundle:load`, `bundle:activate`) do not yet exist in Amplifier's kernel.
-> See [microsoft/amplifier#207](https://github.com/microsoft/amplifier/issues/207) for the proposal.
->
-> Current workaround: Bundle information is extracted from session context when available.
-> The `amplifier.bundle.used` metric tracks bundles when sessions start with bundle information.
+Applications emit bundle telemetry by calling the public API:
 
-**Privacy Protection**: Local bundle paths are sanitized:
+```python
+from amplifier_module_hooks_otel import telemetry
+
+telemetry.bundle_added(name="my-bundle", source="git+https://...")
+telemetry.bundle_activated(name="my-bundle")
+telemetry.bundle_loaded(name="foundation", cached=True)
+```
+
+This approach:
+- Requires no kernel changes (kernel stays bundle-agnostic)
+- Makes it the application's responsibility to emit telemetry
+- Provides graceful degradation (no-op if OTel not configured)
+
+**Privacy Protection**: Local bundle paths are automatically sanitized:
 - Git URLs (`git+https://`, `https://`) are preserved (public)
 - Local paths (`/home/user/...`, `./my-bundle`) become `"local"` (privacy)
 

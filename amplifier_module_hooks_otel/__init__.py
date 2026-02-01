@@ -62,6 +62,7 @@ from opentelemetry import metrics as otel_metrics
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, StatusCode
 
+from . import telemetry
 from .attributes import AttributeMapper
 from .config import CaptureConfig, OTelConfig
 from .metrics import MetricsRecorder
@@ -121,6 +122,7 @@ __all__ = [
     "AttributeMapper",
     "mount",
     "TRACED_EVENTS",
+    "telemetry",
 ]
 
 
@@ -168,6 +170,10 @@ class OTelHook:
 
         self._span_manager = SpanManager(self._tracer)
         self._metrics_recorder = MetricsRecorder(self._meter) if config.metrics_enabled else None
+
+        # Register telemetry API for application use
+        if self._metrics_recorder is not None:
+            telemetry._register(self._metrics_recorder, self._span_manager)
 
         # Internal correlation tracking - avoids mutating event data
         # Maps (session_id, event_type) → correlation_key for pending operations
