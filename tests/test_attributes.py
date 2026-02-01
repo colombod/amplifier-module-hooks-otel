@@ -1,6 +1,6 @@
 """Tests for AttributeMapper."""
 
-from amplifier_module_hooks_otel.attributes import AttributeMapper
+from amplifier_module_hooks_otel.attributes import AttributeMapper, sanitize_bundle_source
 
 
 class TestAttributeMapperForSession:
@@ -176,3 +176,108 @@ class TestAttributeMapperForError:
         attrs = AttributeMapper.for_error(data)
 
         assert "error.type" not in attrs
+
+
+class TestSanitizeBundleSource:
+    """Tests for privacy-aware bundle source sanitization."""
+
+    def test_git_https_url_preserved(self):
+        """Git HTTPS URLs are preserved (public)."""
+        source = "git+https://github.com/microsoft/amplifier-foundation"
+        assert sanitize_bundle_source(source) == source
+
+    def test_git_http_url_preserved(self):
+        """Git HTTP URLs are preserved (public)."""
+        source = "git+http://github.com/org/repo"
+        assert sanitize_bundle_source(source) == source
+
+    def test_https_url_preserved(self):
+        """Plain HTTPS URLs are preserved (public)."""
+        source = "https://github.com/microsoft/amplifier-bundle-recipes"
+        assert sanitize_bundle_source(source) == source
+
+    def test_http_url_preserved(self):
+        """Plain HTTP URLs are preserved (public)."""
+        source = "http://example.com/bundle"
+        assert sanitize_bundle_source(source) == source
+
+    def test_absolute_path_sanitized(self):
+        """Absolute local paths are sanitized to 'local'."""
+        source = "/home/user/my-bundle"
+        assert sanitize_bundle_source(source) == "local"
+
+    def test_relative_path_sanitized(self):
+        """Relative local paths are sanitized to 'local'."""
+        source = "./my-bundle"
+        assert sanitize_bundle_source(source) == "local"
+
+    def test_windows_path_sanitized(self):
+        """Windows-style paths are sanitized to 'local'."""
+        source = "C:\\Users\\dev\\my-bundle"
+        assert sanitize_bundle_source(source) == "local"
+
+    def test_none_returns_unknown(self):
+        """None source returns 'unknown'."""
+        assert sanitize_bundle_source(None) == "unknown"
+
+    def test_file_uri_sanitized(self):
+        """File URIs are sanitized to 'local'."""
+        source = "file:///home/user/bundle"
+        assert sanitize_bundle_source(source) == "local"
+
+
+class TestAttributeMapperForBundle:
+    """Tests for bundle attribute mapping."""
+
+    def test_maps_bundle_name(self):
+        """Bundle name is mapped."""
+        attrs = AttributeMapper.for_bundle(bundle_name="my-bundle")
+        assert attrs[AttributeMapper.AMPLIFIER_BUNDLE_NAME] == "my-bundle"
+
+    def test_maps_bundle_version(self):
+        """Bundle version is mapped."""
+        attrs = AttributeMapper.for_bundle(bundle_name="my-bundle", bundle_version="1.0.0")
+        assert attrs[AttributeMapper.AMPLIFIER_BUNDLE_VERSION] == "1.0.0"
+
+    def test_maps_bundle_source_git(self):
+        """Git source is preserved."""
+        attrs = AttributeMapper.for_bundle(
+            bundle_name="foundation",
+            bundle_source="git+https://github.com/microsoft/amplifier-foundation",
+        )
+        assert (
+            attrs[AttributeMapper.AMPLIFIER_BUNDLE_SOURCE]
+            == "git+https://github.com/microsoft/amplifier-foundation"
+        )
+
+    def test_sanitizes_local_source(self):
+        """Local source is sanitized to 'local'."""
+        attrs = AttributeMapper.for_bundle(
+            bundle_name="my-bundle",
+            bundle_source="/home/user/private-bundle",
+        )
+        assert attrs[AttributeMapper.AMPLIFIER_BUNDLE_SOURCE] == "local"
+
+    def test_handles_missing_version(self):
+        """Missing version doesn't add attribute."""
+        attrs = AttributeMapper.for_bundle(bundle_name="my-bundle")
+        assert AttributeMapper.AMPLIFIER_BUNDLE_VERSION not in attrs
+
+    def test_handles_missing_source(self):
+        """Missing source doesn't add attribute."""
+        attrs = AttributeMapper.for_bundle(bundle_name="my-bundle")
+        assert AttributeMapper.AMPLIFIER_BUNDLE_SOURCE not in attrs
+
+    def test_handles_all_fields(self):
+        """All fields together."""
+        attrs = AttributeMapper.for_bundle(
+            bundle_name="recipes",
+            bundle_version="2.1.0",
+            bundle_source="https://github.com/microsoft/amplifier-bundle-recipes",
+        )
+        assert attrs[AttributeMapper.AMPLIFIER_BUNDLE_NAME] == "recipes"
+        assert attrs[AttributeMapper.AMPLIFIER_BUNDLE_VERSION] == "2.1.0"
+        assert (
+            attrs[AttributeMapper.AMPLIFIER_BUNDLE_SOURCE]
+            == "https://github.com/microsoft/amplifier-bundle-recipes"
+        )

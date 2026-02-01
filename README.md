@@ -304,6 +304,11 @@ Detailed metrics for Amplifier-specific observability:
 | `amplifier.llm.calls` | Counter | `{call}` | Number of LLM calls |
 | `amplifier.sessions.started` | Counter | `{session}` | Number of sessions started |
 | `amplifier.turns.completed` | Counter | `{turn}` | Number of turns completed |
+| `amplifier.bundle.used` | Counter | `{bundle}` | Number of times a bundle is used |
+
+> **Bundle Tracking Note**: Bundle lifecycle events don't yet exist in Amplifier's kernel.
+> See [microsoft/amplifier#207](https://github.com/microsoft/amplifier/issues/207) for the proposal.
+> Local paths are sanitized to `"local"` for privacy; git URLs are preserved.
 
 **Amplifier Metric Attributes:**
 
@@ -315,6 +320,7 @@ Detailed metrics for Amplifier-specific observability:
 | `amplifier.sessions.started` | `amplifier.session.type` (new/fork/resume), `amplifier.user.id` |
 | `amplifier.session.duration` | `amplifier.session.status` (completed/cancelled/error) |
 | `amplifier.turns.completed` | `amplifier.turn.number` |
+| `amplifier.bundle.used` | `amplifier.bundle.name`, `amplifier.bundle.version`, `amplifier.bundle.source` |
 
 ## GenAI Semantic Conventions
 

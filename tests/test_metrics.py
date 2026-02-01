@@ -222,3 +222,45 @@ class TestAmplifierTurnMetrics:
         for i in range(5):
             recorder.record_turn_completed(session_id="sess-123", turn_number=i + 1)
         _ = metric_reader.get_metrics_data()
+
+
+class TestAmplifierBundleMetrics:
+    """Tests for Amplifier bundle metrics.
+    
+    NOTE: Bundle lifecycle events do not yet exist in Amplifier's kernel.
+    See https://github.com/microsoft/amplifier/issues/207 for the proposal.
+    """
+
+    def test_record_bundle_used(self, recorder, metric_reader):
+        """Bundle usage is recorded."""
+        recorder.record_bundle_used(bundle_name="foundation")
+        _ = metric_reader.get_metrics_data()
+
+    def test_record_bundle_used_with_version(self, recorder, metric_reader):
+        """Bundle usage with version is recorded."""
+        recorder.record_bundle_used(
+            bundle_name="recipes",
+            bundle_version="1.0.0",
+        )
+        _ = metric_reader.get_metrics_data()
+
+    def test_record_bundle_used_with_git_source(self, recorder, metric_reader):
+        """Bundle usage with git source is recorded."""
+        recorder.record_bundle_used(
+            bundle_name="foundation",
+            bundle_version="2.0.0",
+            bundle_source="git+https://github.com/microsoft/amplifier-foundation",
+        )
+        _ = metric_reader.get_metrics_data()
+
+    def test_record_bundle_used_with_local_source(self, recorder, metric_reader):
+        """Bundle usage with local source (sanitized) is recorded."""
+        recorder.record_bundle_used(
+            bundle_name="my-bundle",
+            bundle_source="local",  # Already sanitized
+        )
+        _ = metric_reader.get_metrics_data()
+
+    def test_bundle_counter_created(self, recorder):
+        """Bundle counter is created on init."""
+        assert recorder._bundles_used is not None

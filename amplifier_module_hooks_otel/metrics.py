@@ -94,6 +94,17 @@ class MetricsRecorder:
             description="Number of turns completed",
         )
 
+        # ========== Bundle Metrics ==========
+        # NOTE: Bundle lifecycle events do not yet exist in Amplifier's kernel.
+        # See https://github.com/microsoft/amplifier/issues/207 for the proposal.
+        # Current workaround: extract bundle info from session:start when available.
+
+        self._bundles_used: Counter = meter.create_counter(
+            "amplifier.bundle.used",
+            unit="{bundle}",
+            description="Number of times a bundle is used (session started with bundle)",
+        )
+
     # ========== Timing Utilities ==========
 
     def start_timing(self, correlation_key: str) -> None:
@@ -279,3 +290,38 @@ class MetricsRecorder:
         }
         self._turns_completed.add(1, attributes=attributes)
         logger.debug(f"Recorded turn {turn_number} completed for session {session_id}")
+
+    # ========== Bundle Methods ==========
+    # NOTE: Bundle lifecycle events do not yet exist in Amplifier's kernel.
+    # See https://github.com/microsoft/amplifier/issues/207 for the proposal.
+    # Current limitation: bundle info must be extracted from session context.
+
+    def record_bundle_used(
+        self,
+        bundle_name: str,
+        bundle_version: str | None = None,
+        bundle_source: str | None = None,
+    ) -> None:
+        """Record a bundle being used (session started with this bundle).
+
+        NOTE: This is a workaround until proper bundle:* events exist.
+        See https://github.com/microsoft/amplifier/issues/207
+
+        The bundle_source is expected to already be sanitized for privacy
+        (use sanitize_bundle_source() from attributes module).
+
+        Args:
+            bundle_name: Name of the bundle.
+            bundle_version: Version of the bundle (optional).
+            bundle_source: Sanitized source URI (git URL or "local").
+        """
+        attributes: dict[str, Any] = {
+            "amplifier.bundle.name": bundle_name,
+        }
+        if bundle_version:
+            attributes["amplifier.bundle.version"] = bundle_version
+        if bundle_source:
+            attributes["amplifier.bundle.source"] = bundle_source
+
+        self._bundles_used.add(1, attributes=attributes)
+        logger.debug(f"Recorded bundle used: {bundle_name}")
