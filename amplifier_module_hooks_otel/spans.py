@@ -53,16 +53,25 @@ class SpanManager:
         """
         self._tracer = tracer
         self._sessions: dict[str, SessionSpanContext] = {}
-        self._session_spans: dict[str, Span] = {}  # Legacy: session_id → root span
-        self._turn_spans: dict[str, Span] = {}  # Legacy: session_id → current turn span
         self._active_spans: dict[str, Span] = {}  # correlation_key → span
-        self._turn_counters: dict[str, int] = {}  # Legacy: session_id → turn number
 
     def _get_context(self, session_id: str) -> SessionSpanContext:
         """Get or create span context for session."""
         if session_id not in self._sessions:
             self._sessions[session_id] = SessionSpanContext(session_id=session_id)
         return self._sessions[session_id]
+
+    def get_session_span(self, session_id: str) -> Span | None:
+        """Get the root span for a session.
+
+        Args:
+            session_id: The session identifier.
+
+        Returns:
+            The session's root span if it exists, None otherwise.
+        """
+        ctx = self._sessions.get(session_id)
+        return ctx.root_span if ctx else None
 
     def start_session_span(
         self,
@@ -92,9 +101,7 @@ class SpanManager:
         # If this is a child session, link to parent's span for trace continuity
         if parent_session_id:
             parent_ctx = self._sessions.get(parent_session_id)
-            parent_span = parent_ctx.root_span if parent_ctx else self._session_spans.get(
-                parent_session_id
-            )
+            parent_span = parent_ctx.root_span if parent_ctx else None
             if parent_span:
                 # Create context with parent span - this propagates trace_id
                 # and sets parent_id to the parent span's span_id
@@ -115,10 +122,6 @@ class SpanManager:
         ctx.root_span = span
         ctx.turn_count = 0
 
-        # Legacy support
-        self._session_spans[session_id] = span
-        self._turn_counters[session_id] = 0
-
         logger.debug(f"Started session span for {session_id}")
         return span
 
@@ -137,12 +140,11 @@ class SpanManager:
         ctx = self._sessions.get(session_id)
         if ctx and ctx.root_span:
             return ctx.root_span.get_span_context()
-        # Legacy fallback
-        if span := self._session_spans.get(session_id):
-            return span.get_span_context()
         return None
 
-    def end_session_span(self, session_id: str, status: str = "completed", error: str | None = None) -> None:
+    def end_session_span(
+        self, session_id: str, status: str = "completed", error: str | None = None
+    ) -> None:
         """End session span.
 
         Args:
@@ -151,33 +153,30 @@ class SpanManager:
             error: Optional error message.
         """
         ctx = self._sessions.pop(session_id, None)
-        if ctx:
-            if ctx.root_span:
-                ctx.root_span.set_attribute("session.status", status)
-                ctx.root_span.set_attribute("session.turns", ctx.turn_count)
-                if error:
-                    ctx.root_span.set_status(StatusCode.ERROR, error)
-                else:
-                    ctx.root_span.set_status(StatusCode.OK)
-                ctx.root_span.end()
-            # Clean up any remaining turn span
-            if ctx.current_turn:
-                ctx.current_turn.end()
-            # Clean up any remaining tool spans
-            for tool_span in ctx.tool_stack:
-                tool_span.end()
-            if ctx.current_tool:
-                ctx.current_tool.end()
-            logger.debug(f"Ended session span for {session_id}")
+        if not ctx:
+            logger.debug(f"No session context found for {session_id}")
+            return
 
-        # Legacy cleanup
-        if span := self._session_spans.pop(session_id, None):
-            if not ctx:  # Only end if not already ended above
-                span.end()
-        if span := self._turn_spans.pop(session_id, None):
-            if not ctx:
-                span.end()
-        self._turn_counters.pop(session_id, None)
+        if ctx.root_span:
+            ctx.root_span.set_attribute("session.status", status)
+            ctx.root_span.set_attribute("session.turns", ctx.turn_count)
+            if error:
+                ctx.root_span.set_status(StatusCode.ERROR, error)
+            else:
+                ctx.root_span.set_status(StatusCode.OK)
+            ctx.root_span.end()
+
+        # Clean up any remaining turn span
+        if ctx.current_turn:
+            ctx.current_turn.end()
+
+        # Clean up any remaining tool spans
+        for tool_span in ctx.tool_stack:
+            tool_span.end()
+        if ctx.current_tool:
+            ctx.current_tool.end()
+
+        logger.debug(f"Ended session span for {session_id}")
 
     def start_turn_span(self, session_id: str) -> Span | None:
         """Start turn span as child of session.
@@ -189,7 +188,7 @@ class SpanManager:
             The created turn span, or None if no session span exists.
         """
         ctx = self._get_context(session_id)
-        parent_span = ctx.root_span or self._session_spans.get(session_id)
+        parent_span = ctx.root_span
         if not parent_span:
             logger.warning(f"No session span for turn: {session_id}")
             return None
@@ -197,13 +196,9 @@ class SpanManager:
         # End previous turn span if exists
         if ctx.current_turn:
             ctx.current_turn.end()
-        if old_turn := self._turn_spans.get(session_id):
-            if old_turn != ctx.current_turn:
-                old_turn.end()
 
         # Increment turn counter
         ctx.turn_count += 1
-        self._turn_counters[session_id] = ctx.turn_count
 
         # Start new turn span as child of session span
         with trace.use_span(parent_span, end_on_exit=False):
@@ -213,7 +208,6 @@ class SpanManager:
                 attributes={"amplifier.turn.number": ctx.turn_count},
             )
         ctx.current_turn = span
-        self._turn_spans[session_id] = span
         logger.debug(f"Started turn {ctx.turn_count} span for {session_id}")
         return span
 
@@ -228,11 +222,6 @@ class SpanManager:
             ctx.current_turn.end()
             ctx.current_turn = None
             logger.debug(f"Ended turn span for {session_id}")
-
-        # Legacy cleanup
-        if span := self._turn_spans.pop(session_id, None):
-            if not ctx or span != ctx.current_turn:
-                pass  # Already ended above or different span
 
     def start_tool_span(
         self,
@@ -262,9 +251,6 @@ class SpanManager:
         # Parent is current tool (nested), turn, or session
         parent = ctx.current_tool or ctx.current_turn or ctx.root_span
         if not parent:
-            # Legacy fallback
-            parent = self._turn_spans.get(session_id) or self._session_spans.get(session_id)
-        if not parent:
             logger.warning(f"No parent span for tool: {session_id}")
             return None
 
@@ -293,7 +279,9 @@ class SpanManager:
         if correlation_key:
             self._active_spans[correlation_key] = span
 
-        logger.debug(f"Started tool span '{tool_name}' for {session_id} (stack depth: {len(ctx.tool_stack)})")
+        logger.debug(
+            f"Started tool span '{tool_name}' for {session_id} (stack depth: {len(ctx.tool_stack)})"
+        )
         return span
 
     def end_tool_span(
@@ -369,14 +357,12 @@ class SpanManager:
             The created child span, or None if no parent span exists.
         """
         ctx = self._sessions.get(session_id)
+        if not ctx:
+            logger.warning(f"No session context for child span: {session_id}")
+            return None
 
         # Try turn span first, fall back to session span
-        parent = None
-        if ctx:
-            parent = ctx.current_turn or ctx.root_span
-        if not parent:
-            parent = self._turn_spans.get(session_id) or self._session_spans.get(session_id)
-
+        parent = ctx.current_turn or ctx.root_span
         if not parent:
             logger.warning(f"No parent span for child: {session_id}")
             return None

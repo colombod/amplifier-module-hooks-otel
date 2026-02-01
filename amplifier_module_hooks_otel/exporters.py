@@ -10,7 +10,9 @@ Based on robotdad/amplifier-module-hooks-otel exporters.py.
 """
 
 import json
+import logging
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from opentelemetry import metrics, trace
@@ -29,6 +31,8 @@ if TYPE_CHECKING:
 
 from .config import OTelConfig
 
+logger = logging.getLogger(__name__)
+
 
 class FileSpanExporter(SpanExporter):
     """Simple file-based span exporter for debugging.
@@ -38,8 +42,8 @@ class FileSpanExporter(SpanExporter):
 
     def __init__(self, file_path: str):
         self.file_path = file_path
-        # Ensure file exists
-        open(file_path, "a").close()
+        # Ensure file exists (using Path.touch() to avoid file handle leak)
+        Path(file_path).touch()
 
     def export(self, spans: list["ReadableSpan"]) -> SpanExportResult:
         """Export spans to file."""
@@ -143,11 +147,11 @@ def setup_tracing(config: OTelConfig) -> None:
     trace.set_tracer_provider(provider)
 
     if config.debug:
-        print(f"[otel] Configured {config.exporter} trace exporter")
+        logger.debug(f"Configured {config.exporter} trace exporter")
         if config.exporter in ("otlp-http", "otlp-grpc"):
-            print(f"[otel] Endpoint: {config.endpoint}")
+            logger.debug(f"Endpoint: {config.endpoint}")
         elif config.exporter == "file":
-            print(f"[otel] File: {config.file_path}")
+            logger.debug(f"File: {config.file_path}")
 
 
 def setup_metrics(config: OTelConfig) -> None:
@@ -204,4 +208,4 @@ def setup_metrics(config: OTelConfig) -> None:
     metrics.set_meter_provider(provider)
 
     if config.debug:
-        print(f"[otel] Configured {config.exporter} metrics exporter")
+        logger.debug(f"Configured {config.exporter} metrics exporter")

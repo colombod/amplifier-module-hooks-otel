@@ -63,7 +63,7 @@ from opentelemetry import trace
 from opentelemetry.trace import SpanKind, StatusCode
 
 from .attributes import AttributeMapper
-from .config import OTelConfig
+from .config import CaptureConfig, OTelConfig
 from .metrics import MetricsRecorder
 from .spans import SpanManager
 
@@ -115,6 +115,7 @@ TRACED_EVENTS = [
 __all__ = [
     "OTelHook",
     "OTelConfig",
+    "CaptureConfig",
     "SpanManager",
     "MetricsRecorder",
     "AttributeMapper",
@@ -981,7 +982,7 @@ class OTelHook:
         session_id = data.get("session_id")
         if session_id and self._span_manager:
             # Get session span and add completion attribute
-            session_span = self._span_manager._session_spans.get(session_id)
+            session_span = self._span_manager.get_session_span(session_id)
             if session_span:
                 session_span.set_attribute("amplifier.orchestrator.completed", True)
 

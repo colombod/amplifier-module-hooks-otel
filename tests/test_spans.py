@@ -24,14 +24,16 @@ class TestSpanManagerSessionSpans:
         )
 
         assert span is not None
-        assert "session-123" in span_manager._session_spans
+        assert "session-123" in span_manager._sessions
+        assert span_manager.get_session_span("session-123") is not None
 
     def test_end_session_span_closes_span(self, span_manager, span_exporter):
         """Ending a session closes and removes the span."""
         span_manager.start_session_span("session-123", {})
         span_manager.end_session_span("session-123")
 
-        assert "session-123" not in span_manager._session_spans
+        assert "session-123" not in span_manager._sessions
+        assert span_manager.get_session_span("session-123") is None
 
         # Verify span was exported
         spans = span_exporter.get_finished_spans()
@@ -44,8 +46,7 @@ class TestSpanManagerSessionSpans:
         span_manager.start_turn_span("session-123")
         span_manager.end_session_span("session-123")
 
-        assert "session-123" not in span_manager._session_spans
-        assert "session-123" not in span_manager._turn_spans
+        assert "session-123" not in span_manager._sessions
 
     def test_end_nonexistent_session_is_safe(self, span_manager):
         """Ending a non-existent session doesn't raise."""
@@ -66,17 +67,20 @@ class TestSpanManagerTurnSpans:
         turn_span = span_manager.start_turn_span("session-123")
 
         assert turn_span is not None
-        assert "session-123" in span_manager._turn_spans
+        ctx = span_manager._sessions.get("session-123")
+        assert ctx is not None
+        assert ctx.current_turn is not None
 
     def test_start_turn_span_increments_counter(self, span_manager):
         """Each turn increments the turn counter."""
         span_manager.start_session_span("session-123", {})
 
         span_manager.start_turn_span("session-123")
-        assert span_manager._turn_counters["session-123"] == 1
+        ctx = span_manager._sessions.get("session-123")
+        assert ctx.turn_count == 1
 
         span_manager.start_turn_span("session-123")
-        assert span_manager._turn_counters["session-123"] == 2
+        assert ctx.turn_count == 2
 
     def test_start_turn_span_ends_previous_turn(self, span_manager, span_exporter):
         """Starting a new turn ends the previous turn span."""
@@ -97,7 +101,9 @@ class TestSpanManagerTurnSpans:
         span_manager.start_turn_span("session-123")
         span_manager.end_turn_span("session-123")
 
-        assert "session-123" not in span_manager._turn_spans
+        ctx = span_manager._sessions.get("session-123")
+        assert ctx is not None
+        assert ctx.current_turn is None
 
 
 class TestSpanManagerChildSpans:

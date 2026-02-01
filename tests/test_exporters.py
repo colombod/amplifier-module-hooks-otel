@@ -156,11 +156,12 @@ class TestSetupTracing:
         with pytest.raises(ValueError, match="Unknown exporter type"):
             setup_tracing(config)
 
-    def test_debug_output(self, capsys):
-        """Should print debug info when debug=True."""
-        config = OTelConfig(exporter="console", debug=True)  # type: ignore
-        setup_tracing(config)
+    def test_debug_output(self, caplog):
+        """Should log debug info when debug=True."""
+        import logging
 
-        captured = capsys.readouterr()
-        assert "[otel]" in captured.out
-        assert "console" in captured.out
+        with caplog.at_level(logging.DEBUG):
+            config = OTelConfig(exporter="console", debug=True)  # type: ignore
+            setup_tracing(config)
+
+        assert "console" in caplog.text
