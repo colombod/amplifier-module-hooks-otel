@@ -378,6 +378,83 @@ hooks:
 | `batch_delay_ms` | int | `5000` | Batch export delay (ms) |
 | `max_batch_size` | int | `512` | Maximum spans per batch |
 | `debug` | bool | `false` | Enable debug output |
+| `sensitive_data.filter_sensitive_data` | bool | `true` | **Master filter switch - ON by default for privacy** |
+| `sensitive_data.filter_llm_content` | bool | `true` | Filter LLM request/response content |
+| `sensitive_data.filter_user_input` | bool | `true` | Filter user prompts |
+| `sensitive_data.filter_tool_parameters` | bool | `true` | Filter tool input arguments |
+| `sensitive_data.filter_tool_results` | bool | `true` | Filter tool output/results |
+| `sensitive_data.filter_error_messages` | bool | `true` | Filter detailed error messages |
+
+### Sensitive Data Filtering (Privacy Protection)
+
+**By default, sensitive data filtering is ENABLED** to protect privacy and ensure telemetry is safe for production use.
+
+When filtering is enabled (default), the following data is **NOT sent** to telemetry:
+- LLM responses (content)
+- User inputs/prompts (content)
+- Tool parameters/arguments
+- Tool results/outputs
+- Detailed error messages
+
+What **IS still captured** (safe for telemetry):
+- Timings and durations
+- Tool names (which tool was called)
+- Token counts (input/output)
+- Event types and lifecycle
+- Session/turn metadata
+- Error types (not messages with sensitive content)
+- Model and provider names
+- Success/failure status
+
+#### Configuration Examples
+
+**Default (filtering ON - recommended for production):**
+```yaml
+hooks:
+  - module: hooks-otel
+    config:
+      service_name: my-app
+      exporter: otlp-http
+      # sensitive_data filtering is ON by default
+```
+
+**Explicit filtering configuration:**
+```yaml
+hooks:
+  - module: hooks-otel
+    config:
+      service_name: my-app
+      sensitive_data:
+        filter_sensitive_data: true    # Master switch (default: true)
+        filter_llm_content: true       # Filter LLM content
+        filter_user_input: true        # Filter user prompts
+        filter_tool_parameters: true   # Filter tool inputs
+        filter_tool_results: true      # Filter tool outputs
+        filter_error_messages: true    # Filter error details
+```
+
+**Disable filtering (development/debugging only):**
+```yaml
+hooks:
+  - module: hooks-otel
+    config:
+      service_name: my-dev-app
+      sensitive_data:
+        filter_sensitive_data: false   # WARNING: Captures all data!
+```
+
+**Granular control (allow some data types):**
+```yaml
+hooks:
+  - module: hooks-otel
+    config:
+      service_name: my-app
+      sensitive_data:
+        filter_sensitive_data: true
+        filter_tool_parameters: false  # Allow tool inputs (e.g., file paths)
+        filter_tool_results: true      # Still filter outputs
+        filter_error_messages: false   # Allow error messages for debugging
+```
 
 ### Exporter Types
 

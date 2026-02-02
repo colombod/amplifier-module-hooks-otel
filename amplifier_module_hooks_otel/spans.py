@@ -4,14 +4,22 @@ Based on colombod's W3C Trace Context implementation with nested tool stack
 from robotdad/amplifier-module-hooks-otel.
 """
 
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
 from opentelemetry.trace import Span, SpanKind, StatusCode, Tracer
 
+if TYPE_CHECKING:
+    from .config import OTelConfig
+
 logger = logging.getLogger(__name__)
+
+# Placeholder value used when sensitive data is filtered
+FILTERED_PLACEHOLDER = "[FILTERED]"
 
 
 @dataclass
@@ -43,17 +51,38 @@ class SpanManager:
 
     Supports nested tool execution via tool_stack for scenarios like
     the task tool spawning child agent sessions.
+
+    Sensitive Data Filtering:
+        When a config with filter_sensitive_data=True is provided (default),
+        tool inputs and results are NOT captured in span attributes.
+        Only safe metadata (tool name, success status, duration) is recorded.
     """
 
-    def __init__(self, tracer: Tracer) -> None:
-        """Initialize SpanManager with a tracer.
+    def __init__(self, tracer: Tracer, config: OTelConfig | None = None) -> None:
+        """Initialize SpanManager with a tracer and optional config.
 
         Args:
             tracer: OpenTelemetry Tracer instance.
+            config: Optional OTelConfig for sensitive data filtering.
         """
         self._tracer = tracer
+        self._config = config
         self._sessions: dict[str, SessionSpanContext] = {}
         self._active_spans: dict[str, Span] = {}  # correlation_key → span
+
+    def _should_filter(self, data_type: str) -> bool:
+        """Check if a specific type of sensitive data should be filtered.
+
+        Args:
+            data_type: One of "tool_parameters", "tool_results", etc.
+
+        Returns:
+            True if this data type should be filtered out.
+        """
+        if self._config is None:
+            # Default to filtering when no config provided (safe by default)
+            return True
+        return self._config.should_filter(data_type)
 
     def create_standalone_span(
         self,
@@ -255,10 +284,14 @@ class SpanManager:
         Supports nested tools (e.g., task tool calling another tool) by
         maintaining a tool stack per session.
 
+        Sensitive Data Filtering:
+            When filter_sensitive_data is enabled (default), tool_input is NOT
+            captured. Only tool.name and tool.has_input are recorded.
+
         Args:
             session_id: The session identifier.
             tool_name: Name of the tool being executed.
-            tool_input: Optional tool input data.
+            tool_input: Optional tool input data (filtered if sensitive data filtering on).
             correlation_key: Optional key for later retrieval/ending.
             max_attribute_length: Max length for attribute values.
 
@@ -277,21 +310,29 @@ class SpanManager:
         if ctx.current_tool:
             ctx.tool_stack.append(ctx.current_tool)
 
-        # Truncate tool input if needed
-        input_str = ""
-        if tool_input:
-            input_str = str(tool_input)
-            if len(input_str) > max_attribute_length:
-                input_str = input_str[:max_attribute_length] + "...[truncated]"
+        # Build attributes - always include tool name
+        attributes: dict[str, Any] = {
+            "tool.name": tool_name,
+        }
+
+        # Only include tool input if NOT filtering sensitive data
+        if tool_input is not None:
+            if self._should_filter("tool_parameters"):
+                # Record that input exists but don't capture content
+                attributes["tool.has_input"] = True
+                attributes["tool.input"] = FILTERED_PLACEHOLDER
+            else:
+                # Capture input (truncated if needed)
+                input_str = str(tool_input)
+                if len(input_str) > max_attribute_length:
+                    input_str = input_str[:max_attribute_length] + "...[truncated]"
+                attributes["tool.input"] = input_str
 
         with trace.use_span(parent, end_on_exit=False):
             span = self._tracer.start_span(
                 "amplifier.tool",
                 kind=SpanKind.INTERNAL,
-                attributes={
-                    "tool.name": tool_name,
-                    "tool.input": input_str,
-                },
+                attributes=attributes,
             )
 
         ctx.current_tool = span
@@ -315,13 +356,18 @@ class SpanManager:
     ) -> None:
         """End current tool span with nested tool support.
 
+        Sensitive Data Filtering:
+            When filter_sensitive_data is enabled (default), tool results and
+            error messages are NOT captured. Only tool.success status and
+            tool.has_result are recorded.
+
         Args:
             session_id: The session identifier.
             tool_name: Name of the tool (for logging).
             correlation_key: Optional key used when starting.
             success: Whether tool execution succeeded.
-            result: Optional tool result.
-            error: Optional error message.
+            result: Optional tool result (filtered if sensitive data filtering on).
+            error: Optional error message (filtered if sensitive data filtering on).
             max_attribute_length: Max length for attribute values.
         """
         ctx = self._sessions.get(session_id)
@@ -336,14 +382,26 @@ class SpanManager:
         if span:
             span.set_attribute("tool.success", success)
 
+            # Handle result - filter if sensitive data filtering enabled
             if result is not None:
-                result_str = str(result)
-                if len(result_str) > max_attribute_length:
-                    result_str = result_str[:max_attribute_length] + "...[truncated]"
-                span.set_attribute("tool.result", result_str)
+                if self._should_filter("tool_results"):
+                    # Record that result exists but don't capture content
+                    span.set_attribute("tool.has_result", True)
+                    span.set_attribute("tool.result", FILTERED_PLACEHOLDER)
+                else:
+                    # Capture result (truncated if needed)
+                    result_str = str(result)
+                    if len(result_str) > max_attribute_length:
+                        result_str = result_str[:max_attribute_length] + "...[truncated]"
+                    span.set_attribute("tool.result", result_str)
 
+            # Handle error - filter detailed message if sensitive data filtering enabled
             if error:
-                span.set_status(StatusCode.ERROR, error)
+                if self._should_filter("error_messages"):
+                    # Set error status but filter the detailed message
+                    span.set_status(StatusCode.ERROR, FILTERED_PLACEHOLDER)
+                else:
+                    span.set_status(StatusCode.ERROR, error)
             else:
                 span.set_status(StatusCode.OK)
 

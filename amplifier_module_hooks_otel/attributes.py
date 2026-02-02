@@ -1,6 +1,14 @@
 """Attribute mapping from Amplifier kernel events to OTel semantic conventions."""
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .config import OTelConfig
+
+# Placeholder value used when sensitive data is filtered
+FILTERED_PLACEHOLDER = "[FILTERED]"
 
 
 def sanitize_bundle_source(source_uri: str | None) -> str:
@@ -66,6 +74,20 @@ class AttributeMapper:
     This class provides static methods to translate event data from the
     Amplifier kernel into OpenTelemetry attributes following the GenAI
     semantic conventions specification.
+
+    Sensitive Data Filtering:
+        When a config is provided with filter_sensitive_data=True (default),
+        sensitive data such as LLM content, user inputs, tool parameters,
+        and tool results are NOT included in the telemetry attributes.
+
+        Safe data that IS always captured:
+        - Timings and durations
+        - Tool names
+        - Token counts
+        - Event types
+        - Session/turn metadata
+        - Model/provider names
+        - Error types (not detailed messages)
     """
 
     # GenAI semantic convention attribute names
@@ -88,7 +110,7 @@ class AttributeMapper:
     AMPLIFIER_BUNDLE_SOURCE = "amplifier.bundle.source"
 
     @staticmethod
-    def for_session(data: dict[str, Any]) -> dict[str, Any]:
+    def for_session(data: dict[str, Any], config: OTelConfig | None = None) -> dict[str, Any]:
         """Map session:start data to span attributes.
 
         Args:
