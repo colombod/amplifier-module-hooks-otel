@@ -64,7 +64,7 @@ from opentelemetry.trace import SpanKind, StatusCode
 
 from . import telemetry
 from .attributes import AttributeMapper
-from .config import CaptureConfig, OTelConfig
+from .config import CaptureConfig, OTelConfig, SensitiveDataConfig
 from .metrics import MetricsRecorder
 from .spans import SpanManager
 
@@ -117,6 +117,7 @@ __all__ = [
     "OTelHook",
     "OTelConfig",
     "CaptureConfig",
+    "SensitiveDataConfig",
     "SpanManager",
     "MetricsRecorder",
     "AttributeMapper",
@@ -169,7 +170,7 @@ class OTelHook:
             schema_url="https://opentelemetry.io/schemas/1.21.0",
         )
 
-        self._span_manager = SpanManager(self._tracer)
+        self._span_manager = SpanManager(self._tracer, config)
         self._metrics_recorder = MetricsRecorder(self._meter) if config.metrics_enabled else None
 
         # Register telemetry API for application use
@@ -487,19 +488,23 @@ class OTelHook:
         correlation_key = self._pending_tools.pop(session_id, None) if session_id else None
 
         if correlation_key:
-            # Add error attributes
+            # Add error attributes (error.type is safe, not the message)
             span = self._span_manager.get_active_span(correlation_key)  # type: ignore[union-attr]
             if span:
                 error_attrs = AttributeMapper.for_error(data)
                 for key, value in error_attrs.items():
                     span.set_attribute(key, value)
 
+            # Filter error message if sensitive data filtering is enabled
             error_data = data.get("error", {})
-            error_msg = (
-                error_data.get("message", "Tool error")
-                if isinstance(error_data, dict)
-                else "Tool error"
-            )
+            if self.config.should_filter("error_messages"):
+                error_msg = "[FILTERED]"
+            else:
+                error_msg = (
+                    error_data.get("message", "Tool error")
+                    if isinstance(error_data, dict)
+                    else "Tool error"
+                )
             self._span_manager.end_child_span(correlation_key, StatusCode.ERROR, error_msg)  # type: ignore[union-attr]
 
             if self._metrics_recorder:
@@ -529,12 +534,16 @@ class OTelHook:
         correlation_key = self._pending_llm.pop(session_id, None) if session_id else None
 
         if correlation_key:
+            # Filter error message if sensitive data filtering is enabled
             error_data = data.get("error", {})
-            error_msg = (
-                error_data.get("message", "Provider error")
-                if isinstance(error_data, dict)
-                else "Provider error"
-            )
+            if self.config.should_filter("error_messages"):
+                error_msg = "[FILTERED]"
+            else:
+                error_msg = (
+                    error_data.get("message", "Provider error")
+                    if isinstance(error_data, dict)
+                    else "Provider error"
+                )
             self._span_manager.end_child_span(correlation_key, StatusCode.ERROR, error_msg)  # type: ignore[union-attr]
 
             # Record failed LLM call metric

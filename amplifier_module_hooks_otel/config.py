@@ -26,6 +26,38 @@ def _check_opt_out() -> bool:
 
 
 @dataclass
+class SensitiveDataConfig:
+    """Configuration for sensitive data filtering.
+
+    By default, sensitive data filtering is ENABLED to protect privacy.
+    When enabled, the following data is NOT sent to telemetry:
+    - LLM responses (content)
+    - User inputs/prompts (content)
+    - Tool parameters/arguments
+    - Tool results/outputs
+
+    What IS still captured (safe for telemetry):
+    - Timings and durations
+    - Tool names (which tool was called)
+    - Token counts (input/output)
+    - Event types and lifecycle
+    - Session/turn metadata
+    - Error types (not messages with sensitive content)
+    - Model and provider names
+    """
+
+    # Master filter switch - ON by default for privacy
+    filter_sensitive_data: bool = True
+
+    # Granular controls (only apply when filter_sensitive_data=True)
+    filter_llm_content: bool = True  # Filter LLM request/response content
+    filter_user_input: bool = True  # Filter user prompts
+    filter_tool_parameters: bool = True  # Filter tool input arguments
+    filter_tool_results: bool = True  # Filter tool output/results
+    filter_error_messages: bool = True  # Filter detailed error messages
+
+
+@dataclass
 class CaptureConfig:
     """What telemetry signals to capture."""
 
@@ -82,6 +114,9 @@ class OTelConfig:
     # What to capture
     capture: CaptureConfig = field(default_factory=CaptureConfig)
 
+    # Sensitive data filtering (ON by default for privacy)
+    sensitive_data: SensitiveDataConfig = field(default_factory=SensitiveDataConfig)
+
     # Attribute limits (prevent huge payloads)
     max_attribute_length: int = 1000
 
@@ -128,6 +163,22 @@ class OTelConfig:
                 span_events=config.pop("span_events_enabled", True),
             )
 
+        # Handle nested sensitive_data config
+        sensitive_data_dict = config.pop("sensitive_data", {})
+        if sensitive_data_dict:
+            sensitive_data = SensitiveDataConfig(**sensitive_data_dict)
+        else:
+            # Legacy flat config support - filter_sensitive_data at top level
+            filter_sensitive = config.pop("filter_sensitive_data", True)
+            sensitive_data = SensitiveDataConfig(
+                filter_sensitive_data=filter_sensitive,
+                filter_llm_content=config.pop("filter_llm_content", True),
+                filter_user_input=config.pop("filter_user_input", True),
+                filter_tool_parameters=config.pop("filter_tool_parameters", True),
+                filter_tool_results=config.pop("filter_tool_results", True),
+                filter_error_messages=config.pop("filter_error_messages", True),
+            )
+
         known_fields = {
             "enabled",
             "service_name",
@@ -149,7 +200,7 @@ class OTelConfig:
         filtered = {k: v for k, v in config.items() if k in known_fields}
 
         # Create instance
-        instance = cls(capture=capture, **filtered)
+        instance = cls(capture=capture, sensitive_data=sensitive_data, **filtered)
 
         # If env var opts out, override config
         if not _check_opt_out():
@@ -165,3 +216,25 @@ class OTelConfig:
             True if enabled AND at least one of traces/metrics is enabled.
         """
         return self.enabled and (self.capture.traces or self.capture.metrics)
+
+    def should_filter(self, data_type: str) -> bool:
+        """Check if a specific type of sensitive data should be filtered.
+
+        Args:
+            data_type: One of "llm_content", "user_input", "tool_parameters",
+                       "tool_results", "error_messages".
+
+        Returns:
+            True if this data type should be filtered out.
+        """
+        if not self.sensitive_data.filter_sensitive_data:
+            return False
+
+        filter_map = {
+            "llm_content": self.sensitive_data.filter_llm_content,
+            "user_input": self.sensitive_data.filter_user_input,
+            "tool_parameters": self.sensitive_data.filter_tool_parameters,
+            "tool_results": self.sensitive_data.filter_tool_results,
+            "error_messages": self.sensitive_data.filter_error_messages,
+        }
+        return filter_map.get(data_type, True)
