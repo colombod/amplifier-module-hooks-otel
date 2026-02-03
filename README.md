@@ -456,6 +456,97 @@ hooks:
         filter_error_messages: false   # Allow error messages for debugging
 ```
 
+### Large Payload Handling (Size Limits)
+
+**By default, large payloads are DROPPED** to prevent telemetry issues and protect privacy.
+
+Large payloads (like LLM thinking blocks, verbose tool outputs) can cause:
+- Telemetry backend size limits exceeded
+- Increased costs for telemetry storage
+- Performance issues in trace viewers
+- Potential exposure of sensitive data in verbose outputs
+
+#### Configuration Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `payload_limits.drop_large_payloads` | bool | `true` | **Master switch - drop (not truncate) large payloads** |
+| `payload_limits.max_payload_size` | int | `10240` | Max size in bytes for general payloads (10KB) |
+| `payload_limits.max_llm_content_size` | int | `5120` | Max size for LLM content like thinking blocks (5KB) |
+| `payload_limits.max_tool_payload_size` | int | `5120` | Max size for tool inputs/outputs (5KB) |
+| `payload_limits.max_error_size` | int | `2048` | Max size for error messages (2KB) |
+| `payload_limits.include_size_metadata` | bool | `true` | Add metadata about original size when dropping |
+
+#### What Happens to Large Payloads
+
+**Drop mode (default):** Payloads exceeding limits are replaced with:
+```
+[PAYLOAD_DROPPED: size=15000 bytes, limit=5120 bytes]
+```
+
+**Truncate mode:** Payloads are cut to size limit with:
+```
+...original content...[TRUNCATED: 9880 bytes removed]
+```
+
+#### Configuration Examples
+
+**Default (dropping ON - recommended for production):**
+```yaml
+hooks:
+  - module: hooks-otel
+    config:
+      service_name: my-app
+      exporter: otlp-http
+      # payload_limits dropping is ON by default
+```
+
+**Custom size limits:**
+```yaml
+hooks:
+  - module: hooks-otel
+    config:
+      service_name: my-app
+      payload_limits:
+        drop_large_payloads: true
+        max_payload_size: 20480       # 20KB general limit
+        max_llm_content_size: 10240   # 10KB for LLM content
+        max_tool_payload_size: 8192   # 8KB for tool I/O
+        max_error_size: 4096          # 4KB for errors
+        include_size_metadata: true   # Add size info to attributes
+```
+
+**Truncate instead of drop:**
+```yaml
+hooks:
+  - module: hooks-otel
+    config:
+      service_name: my-app
+      payload_limits:
+        drop_large_payloads: false    # Truncate to limit instead of dropping
+        max_tool_payload_size: 5120
+```
+
+**Disable size limits (not recommended):**
+```yaml
+hooks:
+  - module: hooks-otel
+    config:
+      service_name: my-dev-app
+      sensitive_data:
+        filter_sensitive_data: false  # Must also disable sensitive filter
+      payload_limits:
+        max_payload_size: 1000000     # 1MB - very large limit
+```
+
+#### Interaction with Sensitive Data Filtering
+
+**Sensitive data filtering takes precedence.** If `sensitive_data.filter_sensitive_data` is `true` (default), content is filtered BEFORE payload size limits are applied. This means:
+
+1. **Both ON (default):** Content is filtered → replaced with `[FILTERED]`
+2. **Sensitive OFF, Payload ON:** Content passes sensitive filter → payload limits applied
+3. **Both OFF:** Full content captured (use only for debugging)
+
 ### Exporter Types
 
 | Exporter | Use Case | Description |

@@ -84,6 +84,25 @@ class SpanManager:
             return True
         return self._config.should_filter(data_type)
 
+    def _process_payload(
+        self, content: str, payload_type: str = "default"
+    ) -> tuple[str, dict[str, Any]]:
+        """Process a payload, applying size limits if configured.
+
+        Args:
+            content: The payload content to process.
+            payload_type: Type of payload for size limit lookup.
+
+        Returns:
+            Tuple of (processed_content, metadata_dict).
+        """
+        if self._config is None:
+            # No config - return as-is with basic truncation
+            if len(content) > 1000:
+                return content[:1000] + "...[truncated]", {}
+            return content, {}
+        return self._config.process_payload(content, payload_type)
+
     def create_standalone_span(
         self,
         name: str,
@@ -322,11 +341,13 @@ class SpanManager:
                 attributes["tool.has_input"] = True
                 attributes["tool.input"] = FILTERED_PLACEHOLDER
             else:
-                # Capture input (truncated if needed)
+                # Capture input - apply payload size limits
                 input_str = str(tool_input)
-                if len(input_str) > max_attribute_length:
-                    input_str = input_str[:max_attribute_length] + "...[truncated]"
-                attributes["tool.input"] = input_str
+                processed_input, input_metadata = self._process_payload(input_str, "tool_payload")
+                attributes["tool.input"] = processed_input
+                # Add size metadata if available
+                for key, value in input_metadata.items():
+                    attributes[f"tool.input.{key.split('.')[-1]}"] = value
 
         with trace.use_span(parent, end_on_exit=False):
             span = self._tracer.start_span(
@@ -389,11 +410,15 @@ class SpanManager:
                     span.set_attribute("tool.has_result", True)
                     span.set_attribute("tool.result", FILTERED_PLACEHOLDER)
                 else:
-                    # Capture result (truncated if needed)
+                    # Capture result - apply payload size limits
                     result_str = str(result)
-                    if len(result_str) > max_attribute_length:
-                        result_str = result_str[:max_attribute_length] + "...[truncated]"
-                    span.set_attribute("tool.result", result_str)
+                    processed_result, result_metadata = self._process_payload(
+                        result_str, "tool_payload"
+                    )
+                    span.set_attribute("tool.result", processed_result)
+                    # Add size metadata if available
+                    for key, value in result_metadata.items():
+                        span.set_attribute(f"tool.result.{key.split('.')[-1]}", value)
 
             # Handle error - filter detailed message if sensitive data filtering enabled
             if error:
@@ -401,7 +426,9 @@ class SpanManager:
                     # Set error status but filter the detailed message
                     span.set_status(StatusCode.ERROR, FILTERED_PLACEHOLDER)
                 else:
-                    span.set_status(StatusCode.ERROR, error)
+                    # Apply payload size limits to error messages
+                    processed_error, _ = self._process_payload(error, "error")
+                    span.set_status(StatusCode.ERROR, processed_error)
             else:
                 span.set_status(StatusCode.OK)
 
