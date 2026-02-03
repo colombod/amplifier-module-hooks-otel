@@ -26,6 +26,52 @@ def _check_opt_out() -> bool:
 
 
 @dataclass
+class PayloadLimitsConfig:
+    """Configuration for handling large payloads in telemetry.
+
+    Large payloads (like LLM thinking blocks, verbose tool outputs) can cause:
+    - Telemetry backend size limits exceeded
+    - Increased costs for telemetry storage
+    - Performance issues in trace viewers
+    - Potential exposure of sensitive data
+
+    This config allows dropping or truncating large payloads to keep
+    telemetry efficient and within backend limits.
+
+    Attributes:
+        drop_large_payloads: If True, payloads exceeding max size are replaced
+            with a placeholder. If False, they are truncated to max size.
+        max_payload_size: Maximum size in bytes for any single payload.
+            Default 10KB (10240 bytes) - suitable for most telemetry backends.
+        max_llm_content_size: Max size for LLM content (prompts, responses,
+            thinking blocks). Default 5KB - these can be very large.
+        max_tool_payload_size: Max size for tool inputs/outputs.
+            Default 5KB - tool results can be verbose.
+        max_error_size: Max size for error messages/stack traces.
+            Default 2KB - usually sufficient for debugging.
+        include_size_metadata: If True, adds attributes like
+            `payload.original_size` and `payload.truncated` for debugging.
+    """
+
+    # Master switch for large payload handling
+    drop_large_payloads: bool = True  # Drop (not truncate) by default for safety
+
+    # Size limits in bytes
+    max_payload_size: int = 10240  # 10KB default
+    max_llm_content_size: int = 5120  # 5KB for LLM content
+    max_tool_payload_size: int = 5120  # 5KB for tool I/O
+    max_error_size: int = 2048  # 2KB for errors
+
+    # Metadata for debugging
+    include_size_metadata: bool = True  # Add original_size info when dropping
+
+
+# Placeholder constants for dropped/truncated content
+PAYLOAD_DROPPED_PLACEHOLDER = "[PAYLOAD_DROPPED: size={size} bytes, limit={limit} bytes]"
+PAYLOAD_TRUNCATED_SUFFIX = "...[TRUNCATED: {truncated} bytes removed]"
+
+
+@dataclass
 class SensitiveDataConfig:
     """Configuration for sensitive data filtering.
 
@@ -117,7 +163,10 @@ class OTelConfig:
     # Sensitive data filtering (ON by default for privacy)
     sensitive_data: SensitiveDataConfig = field(default_factory=SensitiveDataConfig)
 
-    # Attribute limits (prevent huge payloads)
+    # Payload size limits (drop large payloads by default)
+    payload_limits: PayloadLimitsConfig = field(default_factory=PayloadLimitsConfig)
+
+    # Attribute limits (legacy - use payload_limits for fine-grained control)
     max_attribute_length: int = 1000
 
     # Batching configuration
@@ -179,6 +228,21 @@ class OTelConfig:
                 filter_error_messages=config.pop("filter_error_messages", True),
             )
 
+        # Handle nested payload_limits config
+        payload_limits_dict = config.pop("payload_limits", {})
+        if payload_limits_dict:
+            payload_limits = PayloadLimitsConfig(**payload_limits_dict)
+        else:
+            # Legacy flat config support
+            payload_limits = PayloadLimitsConfig(
+                drop_large_payloads=config.pop("drop_large_payloads", True),
+                max_payload_size=config.pop("max_payload_size", 10240),
+                max_llm_content_size=config.pop("max_llm_content_size", 5120),
+                max_tool_payload_size=config.pop("max_tool_payload_size", 5120),
+                max_error_size=config.pop("max_error_size", 2048),
+                include_size_metadata=config.pop("include_size_metadata", True),
+            )
+
         known_fields = {
             "enabled",
             "service_name",
@@ -200,7 +264,12 @@ class OTelConfig:
         filtered = {k: v for k, v in config.items() if k in known_fields}
 
         # Create instance
-        instance = cls(capture=capture, sensitive_data=sensitive_data, **filtered)
+        instance = cls(
+            capture=capture,
+            sensitive_data=sensitive_data,
+            payload_limits=payload_limits,
+            **filtered,
+        )
 
         # If env var opts out, override config
         if not _check_opt_out():
@@ -238,3 +307,69 @@ class OTelConfig:
             "error_messages": self.sensitive_data.filter_error_messages,
         }
         return filter_map.get(data_type, True)
+
+    def get_payload_limit(self, payload_type: str) -> int:
+        """Get the size limit for a specific payload type.
+
+        Args:
+            payload_type: One of "llm_content", "tool_payload", "error", or "default".
+
+        Returns:
+            Size limit in bytes for this payload type.
+        """
+        limit_map = {
+            "llm_content": self.payload_limits.max_llm_content_size,
+            "tool_payload": self.payload_limits.max_tool_payload_size,
+            "error": self.payload_limits.max_error_size,
+            "default": self.payload_limits.max_payload_size,
+        }
+        return limit_map.get(payload_type, self.payload_limits.max_payload_size)
+
+    def process_payload(
+        self, content: str, payload_type: str = "default"
+    ) -> tuple[str, dict[str, Any]]:
+        """Process a payload, applying size limits if configured.
+
+        This method checks if a payload exceeds size limits and either drops
+        or truncates it based on configuration.
+
+        Args:
+            content: The payload content to process.
+            payload_type: Type of payload for size limit lookup.
+
+        Returns:
+            Tuple of (processed_content, metadata_dict).
+            metadata_dict contains size info if include_size_metadata is True.
+        """
+        if not content:
+            return content, {}
+
+        content_bytes = len(content.encode("utf-8"))
+        limit = self.get_payload_limit(payload_type)
+        metadata: dict[str, Any] = {}
+
+        # Check if within limits
+        if content_bytes <= limit:
+            return content, metadata
+
+        # Payload exceeds limit - handle based on config
+        if self.payload_limits.include_size_metadata:
+            metadata["payload.original_size"] = content_bytes
+            metadata["payload.limit"] = limit
+            metadata["payload.truncated"] = True
+
+        if self.payload_limits.drop_large_payloads:
+            # Drop and replace with placeholder
+            processed = PAYLOAD_DROPPED_PLACEHOLDER.format(size=content_bytes, limit=limit)
+        else:
+            # Truncate to limit
+            # Need to be careful with UTF-8 encoding - truncate by characters
+            # and re-check byte size
+            truncated_content = content
+            while len(truncated_content.encode("utf-8")) > limit:
+                truncated_content = truncated_content[:-100]  # Remove 100 chars at a time
+
+            bytes_removed = content_bytes - len(truncated_content.encode("utf-8"))
+            processed = truncated_content + PAYLOAD_TRUNCATED_SUFFIX.format(truncated=bytes_removed)
+
+        return processed, metadata
